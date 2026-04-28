@@ -1,9 +1,7 @@
 import calendar
-import json
 import logging
 import os
 from datetime import date, datetime, time
-from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import discord
@@ -14,20 +12,7 @@ BIRTHDAY_CHANNEL_ID = int(os.environ.get("BIRTHDAY_CHANNEL_ID", "0"))
 TZ = ZoneInfo(os.environ.get("TIME_ZONE", "UTC"))
 ANNOUNCE_TIME = time(hour=9, tzinfo=TZ)
 
-DATA_FILE = Path(__file__).resolve().parent.parent / "data" / "birthdays.json"
-
 log = logging.getLogger(__name__)
-
-
-def load_birthdays() -> dict[str, dict]:
-    if not DATA_FILE.exists():
-        return {}
-    return json.loads(DATA_FILE.read_text())
-
-
-def save_birthdays(data: dict[str, dict]) -> None:
-    DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
-    DATA_FILE.write_text(json.dumps(data, indent=2))
 
 
 class BirthdayCog(commands.Cog):
@@ -62,9 +47,11 @@ class BirthdayCog(commands.Cog):
             )
             return
 
-        data = load_birthdays()
-        data[str(interaction.user.id)] = {"month": month, "day": day}
-        save_birthdays(data)
+        await self.bot.db.execute(
+            "INSERT OR REPLACE INTO birthdays (user_id, month, day) VALUES (?, ?, ?)",
+            (interaction.user.id, month, day),
+        )
+        await self.bot.db.commit()
 
         await interaction.response.send_message(
             f"Registered. I'll wish you happy birthday on {month:02d}/{day:02d}.",
@@ -91,14 +78,16 @@ class BirthdayCog(commands.Cog):
                 )
                 return
 
-        data = load_birthdays()
-        if data.pop(str(target.id), None) is None:
+        cursor = await self.bot.db.execute(
+            "DELETE FROM birthdays WHERE user_id = ?", (target.id,)
+        )
+        await self.bot.db.commit()
+        if cursor.rowcount == 0:
             await interaction.response.send_message(
                 f"{target.display_name} has no birthday registered.",
                 ephemeral=True,
             )
             return
-        save_birthdays(data)
 
         msg = (
             "Removed your birthday."
@@ -115,15 +104,19 @@ class BirthdayCog(commands.Cog):
         user: discord.Member | None = None,
     ) -> None:
         target = user or interaction.user
-        entry = load_birthdays().get(str(target.id))
-        if entry is None:
+        async with self.bot.db.execute(
+            "SELECT month, day FROM birthdays WHERE user_id = ?", (target.id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+        if row is None:
             await interaction.response.send_message(
                 f"{target.display_name} hasn't registered a birthday.",
                 ephemeral=True,
             )
             return
+        month, day = row
         await interaction.response.send_message(
-            f"{target.display_name}'s birthday: {entry['month']:02d}/{entry['day']:02d}.",
+            f"{target.display_name}'s birthday: {month:02d}/{day:02d}.",
             ephemeral=True,
         )
 
@@ -136,17 +129,20 @@ class BirthdayCog(commands.Cog):
                 "Birthday channel %s not found or not cached yet", BIRTHDAY_CHANNEL_ID
             )
             return
-        # Feb-29 birthdays fall back to Feb 28 in non-leap years.
         feb29_falls_back = (
             today.month == 2 and today.day == 28 and not calendar.isleap(today.year)
         )
-        for user_id, entry in load_birthdays().items():
-            m, d = entry["month"], entry["day"]
-            matches = (m == today.month and d == today.day) or (
-                feb29_falls_back and m == 2 and d == 29
+        if feb29_falls_back:
+            sql = (
+                "SELECT user_id FROM birthdays "
+                "WHERE (month = ? AND day = ?) OR (month = 2 AND day = 29)"
             )
-            if matches:
-                await channel.send(f"Happy birthday, <@{user_id}>!")
+        else:
+            sql = "SELECT user_id FROM birthdays WHERE month = ? AND day = ?"
+        async with self.bot.db.execute(sql, (today.month, today.day)) as cursor:
+            user_ids = [row[0] for row in await cursor.fetchall()]
+        for user_id in user_ids:
+            await channel.send(f"Happy birthday, <@{user_id}>!")
 
     @daily_announce.before_loop
     async def _wait_until_ready(self) -> None:
