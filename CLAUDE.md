@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A personal Discord bot the owner is writing for their own server. **Features will be added one at a time, incrementally** — there is no master spec to design against, so don't pre-build framework/abstraction layers in anticipation of future commands. Add scaffolding only when the next concrete feature requires it, and let architecture emerge from the second or third similar feature, not the first.
 
-For domain language (Archive, Mod-log, Moderator vs. Admin, etc.), see `CONTEXT.md`. For load-bearing technical decisions, see `docs/adr/`.
+For an at-a-glance overview see `README.md`; for operator setup see `USAGE.md`; for end-user / mod command reference see `FEATURES.md`. For domain language (Archive, Mod-log, Moderator vs. Admin, etc.), see `CONTEXT.md`. For load-bearing technical decisions, see `docs/adr/`.
 
 ## Environment
 
