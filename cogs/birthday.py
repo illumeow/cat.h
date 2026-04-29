@@ -2,11 +2,15 @@ import calendar
 import logging
 import os
 from datetime import date, datetime, time
+from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
+
+if TYPE_CHECKING:
+    from bot import Bot
 
 BIRTHDAY_CHANNEL_ID = int(os.environ.get("BIRTHDAY_CHANNEL_ID", "0"))
 TZ = ZoneInfo(os.environ.get("TIME_ZONE", "UTC"))
@@ -16,11 +20,11 @@ log = logging.getLogger(__name__)
 
 
 class BirthdayCog(commands.Cog):
-    def __init__(self, bot: commands.Bot) -> None:
+    def __init__(self, bot: "Bot") -> None:
         self.bot = bot
         self.daily_announce.start()
 
-    def cog_unload(self) -> None:
+    async def cog_unload(self) -> None:
         self.daily_announce.cancel()
 
     birthday = app_commands.Group(
@@ -68,9 +72,11 @@ class BirthdayCog(commands.Cog):
         interaction: discord.Interaction,
         user: discord.Member | None = None,
     ) -> None:
+        # guild_only=True on the group means Discord rejects DM invocations,
+        # so interaction.user is always a Member here. Pylance can't see that.
         target = user or interaction.user
         if target.id != interaction.user.id:
-            perms = interaction.user.guild_permissions
+            perms = interaction.user.guild_permissions # type: ignore
             if not (perms.administrator or perms.manage_guild):
                 await interaction.response.send_message(
                     "Only admins can remove someone else's birthday.",
@@ -129,6 +135,12 @@ class BirthdayCog(commands.Cog):
                 "Birthday channel %s not found or not cached yet", BIRTHDAY_CHANNEL_ID
             )
             return
+        if not isinstance(channel, discord.abc.Messageable):
+            log.warning(
+                "Birthday channel %s is not a text channel; check BIRTHDAY_CHANNEL_ID",
+                BIRTHDAY_CHANNEL_ID,
+            )
+            return
         feb29_falls_back = (
             today.month == 2 and today.day == 28 and not calendar.isleap(today.year)
         )
@@ -149,5 +161,5 @@ class BirthdayCog(commands.Cog):
         await self.bot.wait_until_ready()
 
 
-async def setup(bot: commands.Bot) -> None:
+async def setup(bot: "Bot") -> None:
     await bot.add_cog(BirthdayCog(bot))

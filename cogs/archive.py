@@ -4,6 +4,7 @@ import shutil
 import time as time_mod
 from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
 import aiohttp
@@ -12,6 +13,9 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 import mod_log
+
+if TYPE_CHECKING:
+    from bot import Bot
 
 log = logging.getLogger(__name__)
 
@@ -51,7 +55,7 @@ def _now() -> int:
 
 
 class ArchiveCog(commands.Cog):
-    def __init__(self, bot: commands.Bot) -> None:
+    def __init__(self, bot: "Bot") -> None:
         self.bot = bot
         self._http: aiohttp.ClientSession | None = None
         self.daily_purge.start()
@@ -70,8 +74,7 @@ class ArchiveCog(commands.Cog):
         return user_id in MODERATOR_IDS
 
     def _should_log(self, message: discord.Message) -> bool:
-        if message.guild is None:
-            return False  # DM
+        # Caller is expected to have filtered DMs (message.guild is None).
         if message.is_system():
             return False
         if message.webhook_id is not None:
@@ -91,6 +94,8 @@ class ArchiveCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
+        if message.guild is None:
+            return  # DM — also narrows message.guild for the type checker
         if not self._should_log(message):
             return
         await self.bot.db.execute(
@@ -375,7 +380,7 @@ class ArchiveCog(commands.Cog):
             )
 
         embed = discord.Embed(
-            title=f"Deleted messages ({len(rows)})",
+            title=f"Deleted messages ({len(lines)})",
             description=mod_log.truncate("\n\n".join(lines), mod_log.EMBED_DESC_MAX),
             color=discord.Color.dark_grey(),
         )
@@ -473,5 +478,5 @@ class ArchiveCog(commands.Cog):
         )
 
 
-async def setup(bot: commands.Bot) -> None:
+async def setup(bot: "Bot") -> None:
     await bot.add_cog(ArchiveCog(bot))

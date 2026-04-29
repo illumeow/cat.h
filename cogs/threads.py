@@ -2,11 +2,15 @@ import logging
 import os
 import re
 import time as time_mod
+from typing import TYPE_CHECKING
 
 import discord
 from discord.ext import commands
 
 import mod_log
+
+if TYPE_CHECKING:
+    from bot import Bot
 
 log = logging.getLogger(__name__)
 
@@ -67,7 +71,7 @@ def _rebuild_content(content: str) -> tuple[str, bool]:
 
 
 class ThreadsCog(commands.Cog):
-    def __init__(self, bot: commands.Bot) -> None:
+    def __init__(self, bot: "Bot") -> None:
         self.bot = bot
         self._webhook_cache: dict[int, discord.Webhook] = {}
 
@@ -233,8 +237,8 @@ class ThreadsCog(commands.Cog):
             return  # only the original poster's reactions count
 
         channel = self.bot.get_channel(channel_id)
-        if channel is None:
-            return
+        if not isinstance(channel, discord.abc.Messageable):
+            return  # channel gone, uncached, or not a messageable type anymore
 
         try:
             message = await channel.fetch_message(payload.message_id)
@@ -279,5 +283,5 @@ class ThreadsCog(commands.Cog):
         )
 
 
-async def setup(bot: commands.Bot) -> None:
+async def setup(bot: "Bot") -> None:
     await bot.add_cog(ThreadsCog(bot))

@@ -1,6 +1,7 @@
 import logging
 import os
 
+import aiosqlite
 import discord
 from discord.ext import commands
 from dotenv import load_dotenv
@@ -21,6 +22,12 @@ log = logging.getLogger(__name__)
 
 
 class Bot(commands.Bot):
+    # Set in setup_hook before any cog touches them. Class-level annotations
+    # (no value) so Pylance treats them as known attributes; we use hasattr
+    # in close() in case startup aborts before setup_hook runs.
+    db: aiosqlite.Connection
+    suppressed_deletes: set[int]
+
     def __init__(self) -> None:
         intents = discord.Intents.default()
         intents.message_content = True
@@ -29,8 +36,7 @@ class Bot(commands.Bot):
         # Cross-cog handshake: when one cog deletes a message it owns (e.g.
         # threads cog rewriting a link), it adds the ID here so the archive
         # cog skips the corresponding on_raw_message_delete event.
-        self.suppressed_deletes: set[int] = set()
-        self.db = None  # type: ignore[assignment]  # set in setup_hook
+        self.suppressed_deletes = set()
 
     async def setup_hook(self) -> None:
         self.db = await db.init_db()
@@ -39,7 +45,7 @@ class Bot(commands.Bot):
         await self.tree.sync()
 
     async def close(self) -> None:
-        if self.db is not None:
+        if hasattr(self, "db"):
             await self.db.close()
         await super().close()
 
