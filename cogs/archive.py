@@ -37,7 +37,6 @@ def _parse_id_set(env_value: str) -> set[int]:
     return out
 
 
-MODERATOR_IDS = _parse_id_set(os.environ.get("MODERATOR_IDS", ""))
 USER_EXCLUDED_CHANNELS = _parse_id_set(os.environ.get("ARCHIVE_EXCLUDED_CHANNELS", ""))
 # Mod-log channel is auto-excluded from logging to avoid recursion.
 EXCLUDED_CHANNELS = USER_EXCLUDED_CHANNELS | (
@@ -69,9 +68,6 @@ class ArchiveCog(commands.Cog):
             await self._http.close()
 
     # --- helpers -----------------------------------------------------------
-
-    def _is_moderator(self, user_id: int) -> bool:
-        return user_id in MODERATOR_IDS
 
     def _should_log(self, message: discord.Message) -> bool:
         # Caller is expected to have filtered DMs (message.guild is None).
@@ -324,6 +320,11 @@ class ArchiveCog(commands.Cog):
         name="archive",
         description="Archive query commands (moderator only)",
         guild_only=True,
+        # Hidden from every member by default. The server admin grants access
+        # once per role via Server Settings → Integrations → bot → /archive →
+        # Roles. Discord enforces this at invocation time, so no further
+        # in-handler authorization check is needed.
+        default_permissions=discord.Permissions(),
     )
 
     @archive.command(
@@ -341,12 +342,6 @@ class ArchiveCog(commands.Cog):
         channel: discord.TextChannel | None = None,
         limit: app_commands.Range[int, 1, 25] = 10,
     ) -> None:
-        if not self._is_moderator(interaction.user.id):
-            await interaction.response.send_message(
-                "You're not authorized to use this command.", ephemeral=True
-            )
-            return
-
         sql = (
             "SELECT id, channel_id, author_id, content, edited_at, deleted_at "
             "FROM messages WHERE deleted_at IS NOT NULL"
@@ -398,12 +393,6 @@ class ArchiveCog(commands.Cog):
     async def archive_show(
         self, interaction: discord.Interaction, message_id: str
     ) -> None:
-        if not self._is_moderator(interaction.user.id):
-            await interaction.response.send_message(
-                "You're not authorized to use this command.", ephemeral=True
-            )
-            return
-
         try:
             mid = int(message_id)
         except ValueError:
@@ -427,7 +416,7 @@ class ArchiveCog(commands.Cog):
 
         async with self.bot.db.execute(
             "SELECT content, edited_at FROM message_edits "
-            "WHERE message_id = ? ORDER BY edited_at",
+            "WHERE message_id = ? ORDER BY edited_at DESC",
             (mid,),
         ) as cur:
             edits = await cur.fetchall()

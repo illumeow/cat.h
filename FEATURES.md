@@ -17,7 +17,7 @@ The bot wishes you happy birthday at **09:00 in `TIME_ZONE`** in `BIRTHDAY_CHANN
 
 ## Archive (Moderator only)
 
-`MODERATOR_IDS` is a static allowlist — **not** a Discord permission. Only IDs listed there can run these commands.
+The `/archive` group is **hidden from every member by default** (`default_permissions=Permissions()`); the server admin grants the moderator role access once via Server Settings → Integrations → bot → /archive → Roles. See [USAGE.md § 4](./USAGE.md#4-grant-moderator-access-to-archive-one-time). Discord enforces the role gate at invocation time, so members without the role can neither see nor run the command.
 
 | Command | Effect |
 |---|---|

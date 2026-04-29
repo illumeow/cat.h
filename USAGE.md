@@ -35,11 +35,12 @@ Operating guide for the bot — first-time setup, configuration, run, and deploy
    |---|---|---|
    | `DISCORD_TOKEN` | yes | From step 1 |
    | `TIME_ZONE` | recommended | IANA name (e.g. `Asia/Taipei`). Drives the 09:00 birthday announcement and the 03:00 archive purge |
-   | `MODERATOR_IDS` | for archive | Comma-separated user IDs allowed to use `/archive`. Empty = command is disabled for everyone |
    | `BIRTHDAY_CHANNEL_ID` | for birthday | Channel where the daily birthday message is posted |
    | `MOD_LOG_CHANNEL_ID` | for archive / threads | Channel where edit / delete notices land. Auto-excluded from the archive (no recursion) |
    | `ARCHIVE_EXCLUDED_CHANNELS` | optional | Channels the archive should completely ignore. Comma-separated. Listing a parent channel implicitly excludes all of its Discord threads |
    | `THREADS_EXCLUDED_CHANNELS` | optional | Channels where the threads.com embedder shouldn't run. Comma-separated. Listing a parent channel implicitly excludes all of its Discord threads |
+
+   Authorization for `/archive` is **role-based** and configured in Discord's UI, not via an env var — see step 4 below.
 
 ## 3. Run
 
@@ -60,6 +61,16 @@ uv run python bot.py
 ```
 
 `Ctrl-C` to stop. Same `data/` directory is used.
+
+## 4. Grant moderator access to `/archive` (one-time)
+
+`/archive` ships **hidden from every member by default** (the command sets `default_permissions=Permissions()` so Discord won't display it to anyone). After the bot is online, grant the moderator role access **once** via Discord's UI:
+
+1. **Server Settings → Integrations → your bot**
+2. Find `/archive` in the command list and click it.
+3. Under **Roles & Members**, add your `@Moderators` role with **Allow**.
+
+Discord enforces this server-side — users without the role can't see or invoke the command, so this is the sole authorization gate. The override persists across bot restarts. Repeat per server if you ever invite the bot somewhere else.
 
 ## Deployment notes
 

@@ -17,7 +17,7 @@ The single channel (`MOD_LOG_CHANNEL_ID`) where the bot posts a real-time notice
 _Avoid_: "audit log" (Discord uses that for its own concept), "log channel".
 
 **Moderator**:
-A user whose Discord ID appears in `MODERATOR_IDS`. Moderators can run archive query commands. **Not** a Discord-permission concept; the bot does not consult Discord roles or `Manage Messages` for this. Distinct from "admin".
+A user with a Discord role that has been granted access to the `/archive` group via Server Settings → Integrations → bot → /archive → Roles. The `/archive` group is hidden from every member by default; the role override is the sole authorization gate, enforced server-side by Discord. Distinct from "admin".
 _Avoid_: "mod", "trusted user".
 
 **Admin**:
@@ -51,5 +51,5 @@ The human author of the message that the Threads cog deleted to produce a Webhoo
 
 ## Flagged ambiguities
 
-- "moderator" vs "admin" — **resolved**: Moderator is the `MODERATOR_IDS` allowlist; Admin is the Discord-permission concept. The two gates protect different things on purpose.
+- "moderator" vs "admin" — **resolved**: Moderator is the Discord role granted access to `/archive` via the Integrations UI; Admin is the Discord-permission concept (`Administrator` / `Manage Server`). The two gates protect different things on purpose: Moderator gates audit-log access; Admin gates editing other users' personal data.
 - "log" alone is ambiguous (could mean the Archive table, the Mod-log channel, or stdout). **Resolved**: always say "Archive" or "Mod-log"; reserve "log" / "logging" for stdout / `logging` module output.
