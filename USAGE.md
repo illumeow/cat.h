@@ -87,10 +87,41 @@ docker compose up -d --build
 
 The bind-mounted `./data` directory is what persists; the container itself is disposable.
 
+## Reset
+
+Wipe all persisted state (birthdays, archived messages, attachments, webhook-repost tracking) and start fresh:
+
+```sh
+docker compose down
+rm -rf data/bot.db data/attachments
+docker compose up -d
+```
+
+## Inspect the database
+
+State lives in a single SQLite file at `data/bot.db` (bind-mounted from the host even when running under Docker). The bot opens it in WAL mode, so read-only queries are safe to run while the bot is up.
+
+```sh
+sqlite3 data/bot.db
+```
+
+Useful starting points:
+
+```sql
+.tables                                       -- list tables
+.schema birthdays                             -- show one table's columns
+SELECT * FROM birthdays;
+SELECT id, author_id, deleted_at FROM messages
+  WHERE deleted_at IS NOT NULL
+  ORDER BY deleted_at DESC LIMIT 20;
+SELECT * FROM webhook_reposts;
+```
+
+Tables: `birthdays`, `messages`, `message_edits`, `attachments`, `webhook_reposts` (full schema in `db.py`).
+
 ## Troubleshooting
 
 - **Slash commands not appearing**: Discord caches the per-guild command tree for up to an hour. Wait, or remove + re-invite the bot.
 - **`Mod-log channel … not in cache`**: the bot is starting up. Resolves once the gateway connection is fully ready (a few seconds).
 - **`Missing Manage Webhooks` / `Missing Manage Messages`**: grant the permission to the bot's role; the next message will pick it up. No restart needed.
 - **Archive shows 0 results for a known deleted message**: check whether the channel is in `ARCHIVE_EXCLUDED_CHANNELS`, whether the message was older than 90 days, or whether the bot was offline when the message was originally sent (only messages the bot has seen via `on_message` are tracked).
-- **Reset everything**: `docker compose down`, `rm -rf data/bot.db data/attachments`, `docker compose up -d`.
