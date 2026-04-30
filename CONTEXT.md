@@ -28,7 +28,7 @@ _Avoid_: conflating with Moderator.
 A channel ID listed in `ARCHIVE_EXCLUDED_CHANNELS` (or in the cog-specific `LINK_EMBEDDER_EXCLUDED_CHANNELS`). The Archive (resp. Link embedder) feature does nothing in that channel. The Mod-log channel is auto-excluded from both without needing to be listed.
 
 **Webhook repost**:
-The bot's replacement for a user message that contained a tracked link from a supported platform (currently `threads.com` / `threads.net`, where the whole query is stripped, and `instagram.com` URLs carrying an `?igsh=…` share tracker, where only `igsh` is removed). The original is deleted; a webhook posts the cleaned version under the original poster's username and avatar. Tracked in the `webhook_reposts` table for 7 days so reactions can drive confirm/delete; the row remembers the user's original message ID so a later ❌ surfaces an `/archive show`-able ID in the mod-log "Deleted" notice (the webhook repost itself isn't archived).
+The bot's replacement for a user message that contained a tracked link from a supported platform (currently `threads.com` / `threads.net`, where the whole query is stripped, and `instagram.com` URLs carrying an `?igsh=…` share tracker, where only `igsh` is removed). The original is deleted; a webhook posts the cleaned version under the original poster's username and avatar. Tracked in the `webhook_reposts` table for 90 days (same window as the archive) so reactions can drive confirm/delete even on older posts; the row remembers the user's original message ID so a later ❌ surfaces an `/archive show`-able ID in the mod-log "Deleted" notice (the webhook repost itself isn't archived).
 _Avoid_: "rewrite", "fix" (vague).
 
 **Original poster**:
@@ -38,7 +38,7 @@ The human author of the message that the Threads cog deleted to produce a Webhoo
 
 - A **User** has zero or one **Birthday**.
 - An **Archive** entry belongs to one **User** (author) and one **Channel**, and has zero-or-more edit revisions and zero-or-more downloaded attachments.
-- A **Webhook repost** has exactly one **Original poster** and lives for at most 7 days as an interactive object (reactions); the message itself stays in chat indefinitely.
+- A **Webhook repost** has exactly one **Original poster** and lives as an interactive object (reactions) for the same 90-day window as the archive; the message itself stays in chat indefinitely.
 - The **Mod-log** receives notices from the Archive cog (edits / deletions) and the Threads cog (✗ deletions of webhook reposts).
 - The **Mod-log channel** is implicitly an Excluded channel for the Archive (no recursion).
 

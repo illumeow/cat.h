@@ -44,7 +44,7 @@ The **original poster** (and only the original poster) can:
 - ✅ → confirm the repost. Bot clears all reactions; message stays as-is.
 - ❌ → delete. Bot deletes the repost and posts a "Deleted" notice in `MOD_LOG_CHANNEL_ID`.
 
-After **7 days** the tracking row expires and the reactions stop being interactive — the message itself stays in chat indefinitely.
+After **90 days** (matching the archive retention) the tracking row expires and the reactions stop being interactive — the message itself stays in chat indefinitely.
 
 If the bot is missing **Manage Messages** in a channel, it falls back to keeping the original alongside the webhook repost (you'll see duplicates — that's the signal to fix the permission). If it's missing **Manage Webhooks**, the embedder is silently disabled in that channel.
 

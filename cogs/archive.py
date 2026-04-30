@@ -34,7 +34,11 @@ EXCLUDED_CHANNELS = USER_EXCLUDED_CHANNELS | (
 
 ATTACHMENTS_DIR = Path(__file__).resolve().parent.parent / "data" / "attachments"
 TTL_DAYS = 90
-WEBHOOK_REPOST_TTL_DAYS = 7
+# Same window as the archive: a row in webhook_reposts only matters for
+# reposts the user never reacts to (✅/❌ both delete the row when
+# processed). Aligning to TTL_DAYS lets the original poster ❌ a stale
+# repost any time within the archive retention, not just the first week.
+WEBHOOK_REPOST_TTL_DAYS = TTL_DAYS
 MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024  # 25 MB
 
 
