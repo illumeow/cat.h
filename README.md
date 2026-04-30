@@ -34,17 +34,23 @@ For the slash command reference and per-feature behavior, see **[FEATURES.md](./
 ## Repository layout
 
 ```
-bot.py              # entry point — commands.Bot subclass
-db.py               # shared aiosqlite connection + schema
-mod_log.py          # shared edit/delete embed builders
-cogs/
-  birthday.py
-  archive.py
-  link_embedder.py
-data/               # runtime state (gitignored): bot.db, attachments/
-docs/adr/           # architecture decision records
-Dockerfile
-docker-compose.yml
+.
+├── bot.py              # entry point — commands.Bot subclass
+├── db.py               # shared aiosqlite connection + schema
+├── mod_log.py          # shared edit/delete embed builders
+├── utils.py            # tiny cross-cog helpers (parse_id_set)
+├── cogs/
+│   ├── birthday.py
+│   ├── archive.py
+│   └── link_embedder.py
+├── preview/            # sidecar: Node + Playwright link-preview service
+│   ├── server.cjs
+│   ├── package.json
+│   └── Dockerfile
+├── data/               # runtime state (gitignored): bot.db, attachments/
+├── docs/adr/           # architecture decision records
+├── Dockerfile
+└── docker-compose.yml
 ```
 
 To add a feature, create `cogs/<name>.py`, add `"cogs.<name>"` to `EXTENSIONS` in `bot.py`, and document it in [FEATURES.md](./FEATURES.md).

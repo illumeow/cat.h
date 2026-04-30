@@ -37,8 +37,9 @@ No commands. When someone **posts or edits a message to add** a tracked link fro
    - **Threads** (`threads.com` / `threads.net`): drops the entire `?…` query. Every threads link is reposted (even ones with no tracker) — Discord's threads embed re-fetches more reliably from a fresh post.
    - **Instagram** (`instagram.com`): drops only `igsh=…` from the query, keeping anything else like `img_index=2`. Plain IG links without `igsh` are left alone.
 2. Deletes the original message
-3. Reposts the cleaned link via a per-channel webhook, using the original poster's username and avatar — so Discord renders an embed preview
-4. Adds ✅ and ❌ reactions on the repost
+3. Reposts the cleaned link via a per-channel webhook, using the original poster's username and avatar
+4. Calls the **preview sidecar** (`preview/`, a separate Playwright + Chromium service) to fetch OG metadata for the link, builds a custom Discord embed from it, and attaches that to the webhook — Discord's native Threads/IG embeds are usually broken or missing, so the bot generates its own. Discord's auto-embed is suppressed on the webhook send to avoid double-rendering. If the sidecar is down or `PREVIEW_SERVICE_URL` is unset, this step is skipped and the user just sees the cleaned URL with no custom embed
+5. Adds ✅ and ❌ reactions on the repost
 
 The **original poster** (and only the original poster) can:
 - ✅ → confirm the repost. Bot clears all reactions; message stays as-is.

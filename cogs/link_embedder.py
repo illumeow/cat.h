@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import re
@@ -6,6 +7,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
+import aiohttp
 import discord
 from discord.ext import commands
 
@@ -35,6 +37,20 @@ CONFIRM_EMOJI = "\N{WHITE HEAVY CHECK MARK}"
 DELETE_EMOJI = "\N{CROSS MARK}"
 
 MOD_LOG_CHANNEL_ID = int(os.environ.get("MOD_LOG_CHANNEL_ID", "0"))
+
+# Sidecar that runs Playwright + Chromium and returns OG metadata for a
+# given URL. Optional: an empty value disables custom embeds and the bot
+# falls back to letting Discord render whatever it can.
+PREVIEW_SERVICE_URL = os.environ.get("PREVIEW_SERVICE_URL", "").rstrip("/")
+PREVIEW_TIMEOUT_S = 15
+# Platform brand-ish colors for the custom embed's left bar.
+PLATFORM_COLORS: dict[str, discord.Color] = {
+    "threads": discord.Color.from_str("#000000"),
+    "instagram": discord.Color.from_str("#E1306C"),
+}
+# Discord embed limits (we keep a small headroom under the hard caps).
+EMBED_TITLE_MAX = 250
+EMBED_DESC_MAX = 4000
 
 
 USER_EXCLUDED_CHANNELS = parse_id_set(
@@ -85,35 +101,57 @@ URL_RULES: list[tuple[str, re.Pattern[str], Callable[[str], str]]] = [
 
 def _apply_rule(
     text: str, pattern: re.Pattern[str], cleaner: Callable[[str], str]
-) -> tuple[str, bool]:
+) -> tuple[str, list[str]]:
     """Substitute every match of `pattern` in `text` with `cleaner(match)`.
-    Returns (rebuilt, matched_anything)."""
-    matched = False
+    Returns (rebuilt, cleaned_urls) — `cleaned_urls` is each match after
+    the cleaner ran, in source order, useful for the preview sidecar."""
+    cleaned_urls: list[str] = []
 
     def replace(m: re.Match[str]) -> str:
-        nonlocal matched
-        matched = True
-        return cleaner(m.group(0))
+        cleaned = cleaner(m.group(0))
+        cleaned_urls.append(cleaned)
+        return cleaned
 
-    return pattern.sub(replace, text), matched
+    return pattern.sub(replace, text), cleaned_urls
 
 
-def _rebuild_content(content: str) -> tuple[str, bool]:
-    """Apply each URL rule to the message text. Returns (rebuilt, triggered).
-    Triggered if any rule matched at least one URL — that's the cue to do
-    the webhook repost."""
+def _rebuild_content(content: str) -> tuple[str, list[str]]:
+    """Apply each URL rule to the message text. Returns (rebuilt, urls) —
+    `urls` is the cleaned form of every URL we matched. Empty list means
+    no rule fired (the cue to leave the message alone)."""
     rebuilt = content
-    triggered = False
+    matched_urls: list[str] = []
     for _name, pattern, cleaner in URL_RULES:
-        rebuilt, matched = _apply_rule(rebuilt, pattern, cleaner)
-        triggered = triggered or matched
-    return rebuilt, triggered
+        rebuilt, urls = _apply_rule(rebuilt, pattern, cleaner)
+        matched_urls.extend(urls)
+    return rebuilt, matched_urls
+
+
+def _truncate_for_embed(s: str | None, limit: int) -> str | None:
+    """Cap a Discord embed field at `limit` characters with an ellipsis;
+    return None for empty/None so set_* / kwargs skip the field cleanly."""
+    if not s:
+        return None
+    s = s.strip()
+    if not s:
+        return None
+    if len(s) <= limit:
+        return s
+    return s[: limit - 1].rstrip() + "…"
 
 
 class LinkEmbedderCog(commands.Cog):
     def __init__(self, bot: "Bot") -> None:
         self.bot = bot
         self._webhook_cache: dict[int, discord.Webhook] = {}
+        self._http: aiohttp.ClientSession | None = None
+
+    async def cog_load(self) -> None:
+        self._http = aiohttp.ClientSession()
+
+    async def cog_unload(self) -> None:
+        if self._http is not None:
+            await self._http.close()
 
     # --- helpers -----------------------------------------------------------
 
@@ -131,6 +169,64 @@ class LinkEmbedderCog(commands.Cog):
         ):
             return True
         return False
+
+    async def _fetch_preview(self, url: str) -> dict | None:
+        """Ask the preview sidecar for OG metadata about `url`. Returns the
+        decoded JSON dict on success, None on any failure (timeout, HTTP
+        error, service down)."""
+        if not PREVIEW_SERVICE_URL or self._http is None:
+            return None
+        try:
+            async with self._http.get(
+                f"{PREVIEW_SERVICE_URL}/preview",
+                params={"url": url},
+                timeout=aiohttp.ClientTimeout(total=PREVIEW_TIMEOUT_S),
+            ) as resp:
+                if resp.status != 200:
+                    log.warning(
+                        "Preview service returned %s for %s", resp.status, url
+                    )
+                    return None
+                return await resp.json()
+        except (aiohttp.ClientError, asyncio.TimeoutError):
+            log.exception("Preview service request failed for %s", url)
+            return None
+
+    async def _build_preview_embeds(self, urls: list[str]) -> list[discord.Embed]:
+        """Hit the preview sidecar for each cleaned URL (in parallel) and
+        turn the OG metadata into a Discord embed. Skip URLs where the
+        sidecar has nothing useful or the call failed; cap at Discord's
+        10-embeds-per-message limit."""
+        if not urls or not PREVIEW_SERVICE_URL or self._http is None:
+            return []
+        # Cap to 10 to match Discord's per-message embed limit.
+        results = await asyncio.gather(
+            *(self._fetch_preview(u) for u in urls[:10])
+        )
+        embeds: list[discord.Embed] = []
+        for url, meta in zip(urls, results):
+            if not meta:
+                continue
+            title = _truncate_for_embed(meta.get("title"), EMBED_TITLE_MAX)
+            description = _truncate_for_embed(
+                meta.get("description"), EMBED_DESC_MAX
+            )
+            if not title and not description and not meta.get("image"):
+                continue  # nothing worth rendering
+            embed = discord.Embed(
+                title=title,
+                description=description,
+                url=url,
+                color=PLATFORM_COLORS.get(
+                    meta.get("platform"), discord.Color.default()
+                ),
+            )
+            if meta.get("siteName"):
+                embed.set_author(name=meta["siteName"])
+            if meta.get("image"):
+                embed.set_image(url=meta["image"])
+            embeds.append(embed)
+        return embeds
 
     def _webhook_name(self) -> str:
         bot_user = self.bot.user
@@ -248,14 +344,20 @@ class LinkEmbedderCog(commands.Cog):
         else:
             return  # voice/stage/uncategorized — nothing we can post into
 
-        new_content, changed = _rebuild_content(message.content)
-        if not changed:
+        new_content, matched_urls = _rebuild_content(message.content)
+        if not matched_urls:
             return
 
         webhook = await self._get_webhook(parent_channel)
         if webhook is None:
             # No webhook permission — leave the original message alone.
             return
+
+        # Build custom embeds from the preview sidecar before sending so we
+        # can attach them in one go and tell Discord to suppress its own
+        # auto-embed for those URLs (otherwise we'd render twice — ours
+        # plus Discord's broken native one for Threads/IG).
+        embeds = await self._build_preview_embeds(matched_urls)
 
         # Post the rewritten copy first; if that fails we don't want to leave
         # the channel with neither version.
@@ -268,6 +370,9 @@ class LinkEmbedderCog(commands.Cog):
         }
         if thread is not None:
             send_kwargs["thread"] = thread
+        if embeds:
+            send_kwargs["embeds"] = embeds
+            send_kwargs["suppress_embeds"] = True
         try:
             sent = await webhook.send(**send_kwargs)
         except discord.HTTPException:

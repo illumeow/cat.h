@@ -39,6 +39,7 @@ Operating guide for the bot — first-time setup, configuration, run, and deploy
    | `MOD_LOG_CHANNEL_ID` | for archive / link embedder | Channel where edit / delete notices land. Auto-excluded from both the archive and the link embedder (no recursion) |
    | `ARCHIVE_EXCLUDED_CHANNELS` | optional | Channels the archive should completely ignore. Comma-separated. Listing a parent channel implicitly excludes all of its Discord threads |
    | `LINK_EMBEDDER_EXCLUDED_CHANNELS` | optional | Channels where the link embedder shouldn't run. Comma-separated. Listing a parent channel implicitly excludes all of its Discord threads. The mod-log channel is auto-excluded |
+   | `PREVIEW_SERVICE_URL` | optional | URL of the Playwright preview sidecar. Set automatically inside `docker-compose.yml` (`http://preview:3000`); leave blank when running the bot locally without the sidecar to fall back to no custom embed |
 
    Authorization for `/archive` is **role-based** and configured in Discord's UI, not via an env var — see step 4 below.
 

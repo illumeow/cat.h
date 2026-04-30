@@ -5,3 +5,16 @@ services:
     volumes:
       - ./data:/app/data
     restart: unless-stopped
+    # Reach the preview sidecar by service name on the default compose
+    # network. The bot tolerates the service being unreachable (falls
+    # back to no custom embed), so this isn't a hard dependency.
+    environment:
+      - PREVIEW_SERVICE_URL=http://preview:3000
+    depends_on:
+      - preview
+
+  preview:
+    build: ./preview
+    restart: unless-stopped
+    # No `ports:` — the bot is the only client; keep it on the internal
+    # compose network rather than exposing Chromium to the host.
