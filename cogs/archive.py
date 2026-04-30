@@ -33,12 +33,11 @@ EXCLUDED_CHANNELS = USER_EXCLUDED_CHANNELS | (
 )
 
 ATTACHMENTS_DIR = Path(__file__).resolve().parent.parent / "data" / "attachments"
+# Retention window for everything the archive cog purges nightly: message
+# rows + edits + attachments, plus webhook_reposts (✅/❌ both delete the
+# row when processed, so this only governs the rare case where the user
+# never reacts).
 TTL_DAYS = 90
-# Same window as the archive: a row in webhook_reposts only matters for
-# reposts the user never reacts to (✅/❌ both delete the row when
-# processed). Aligning to TTL_DAYS lets the original poster ❌ a stale
-# repost any time within the archive retention, not just the first week.
-WEBHOOK_REPOST_TTL_DAYS = TTL_DAYS
 MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024  # 25 MB
 
 
@@ -395,24 +394,18 @@ class ArchiveCog(commands.Cog):
 
     @tasks.loop(time=PURGE_TIME)
     async def daily_purge(self) -> None:
-        msg_cutoff = int(
+        cutoff = int(
             (datetime.now(timezone.utc) - timedelta(days=TTL_DAYS)).timestamp()
         )
         async with self.bot.db.execute(
-            "SELECT id FROM messages WHERE created_at < ?", (msg_cutoff,)
+            "SELECT id FROM messages WHERE created_at < ?", (cutoff,)
         ) as cur:
             ids = [row[0] for row in await cur.fetchall()]
         await self.bot.db.execute(
-            "DELETE FROM messages WHERE created_at < ?", (msg_cutoff,)
-        )
-
-        repost_cutoff = int(
-            (
-                datetime.now(timezone.utc) - timedelta(days=WEBHOOK_REPOST_TTL_DAYS)
-            ).timestamp()
+            "DELETE FROM messages WHERE created_at < ?", (cutoff,)
         )
         await self.bot.db.execute(
-            "DELETE FROM webhook_reposts WHERE posted_at < ?", (repost_cutoff,)
+            "DELETE FROM webhook_reposts WHERE posted_at < ?", (cutoff,)
         )
         await self.bot.db.commit()
 
