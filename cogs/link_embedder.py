@@ -4,7 +4,7 @@ import os
 import re
 import time as time_mod
 from collections.abc import Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import aiohttp
@@ -170,7 +170,7 @@ class LinkEmbedderCog(commands.Cog):
             return True
         return False
 
-    async def _fetch_preview(self, url: str) -> dict | None:
+    async def _fetch_preview(self, url: str) -> dict[str, Any] | None:
         """Ask the preview sidecar for OG metadata about `url`. Returns the
         decoded JSON dict on success, None on any failure (timeout, HTTP
         error, service down) — the caller treats None as "no embed for
