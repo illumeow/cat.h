@@ -173,7 +173,8 @@ class LinkEmbedderCog(commands.Cog):
     async def _fetch_preview(self, url: str) -> dict | None:
         """Ask the preview sidecar for OG metadata about `url`. Returns the
         decoded JSON dict on success, None on any failure (timeout, HTTP
-        error, service down)."""
+        error, service down) — the caller treats None as "no embed for
+        this URL," so the bot stays usable with the sidecar absent."""
         if not PREVIEW_SERVICE_URL or self._http is None:
             return None
         try:
@@ -188,7 +189,7 @@ class LinkEmbedderCog(commands.Cog):
                     )
                     return None
                 return await resp.json()
-        except (aiohttp.ClientError, asyncio.TimeoutError):
+        except Exception:
             log.exception("Preview service request failed for %s", url)
             return None
 
@@ -354,15 +355,22 @@ class LinkEmbedderCog(commands.Cog):
             return
 
         # Build custom embeds from the preview sidecar before sending so we
-        # can attach them in one go and tell Discord to suppress its own
-        # auto-embed for those URLs (otherwise we'd render twice — ours
-        # plus Discord's broken native one for Threads/IG).
+        # can attach them in one go. When we have custom embeds we wrap
+        # each rewritten URL in <…> in the message body — Discord renders
+        # bare URLs with an auto-preview by default, and our explicit
+        # embeds would compete with (and double-render alongside) those.
+        # We can't use suppress_embeds=True for this: it sets the message's
+        # SUPPRESS_EMBEDS flag, which hides every embed including our own.
         embeds = await self._build_preview_embeds(matched_urls)
+        body = new_content
+        if embeds:
+            for url in set(matched_urls):
+                body = body.replace(url, f"<{url}>")
 
         # Post the rewritten copy first; if that fails we don't want to leave
         # the channel with neither version.
         send_kwargs: dict = {
-            "content": new_content,
+            "content": body,
             "username": message.author.display_name,
             "avatar_url": message.author.display_avatar.url,
             "wait": True,
@@ -372,7 +380,6 @@ class LinkEmbedderCog(commands.Cog):
             send_kwargs["thread"] = thread
         if embeds:
             send_kwargs["embeds"] = embeds
-            send_kwargs["suppress_embeds"] = True
         try:
             sent = await webhook.send(**send_kwargs)
         except discord.HTTPException:
