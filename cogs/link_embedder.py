@@ -214,13 +214,14 @@ class LinkEmbedderCog(commands.Cog):
             )
             if not title and not description and not meta.get("image"):
                 continue  # nothing worth rendering
+            platform = meta.get("platform")
+            if not isinstance(platform, str):
+                platform = ""
             embed = discord.Embed(
                 title=title,
                 description=description,
                 url=url,
-                color=PLATFORM_COLORS.get(
-                    meta.get("platform"), discord.Color.default()
-                ),
+                color=PLATFORM_COLORS.get(platform, discord.Color.default()),
             )
             if meta.get("siteName"):
                 embed.set_author(name=meta["siteName"])
