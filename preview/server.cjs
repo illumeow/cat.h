@@ -15,6 +15,18 @@ const NETWORKIDLE_TIMEOUT_MS = Number.parseInt(
   process.env.NETWORKIDLE_TIMEOUT_MS || '1500',
   10,
 );
+// Cap on how long we'll wait for a Cloudflare-style "Just a moment..."
+// challenge to clear via its own JS handshake. Some sites (Dcard) sit
+// behind one of these; without the wait we'd capture the challenge page
+// as the OG metadata.
+const CHALLENGE_WAIT_MS = Number.parseInt(
+  process.env.CHALLENGE_WAIT_MS || '8000',
+  10,
+);
+// Mirrors the Python-side CHALLENGE_TITLE_RE in cogs/link_embedder.py;
+// any change here probably wants a matching change there.
+const CHALLENGE_TITLE_RE =
+  /\b(?:just a moment|cloudflare|attention required|checking your browser|security check)\b/i;
 const USER_AGENT =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 ' +
   '(KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36';
@@ -66,6 +78,29 @@ async function probe(targetUrl) {
       page.waitForLoadState('networkidle', { timeout: NETWORKIDLE_TIMEOUT_MS }),
       page.waitForTimeout(NETWORKIDLE_TIMEOUT_MS),
     ]).catch(() => null);
+
+    // Cloudflare's basic JS challenge sets `document.title` to "Just a
+    // moment..." then resolves itself a few seconds later. If we read
+    // metadata immediately we capture the challenge page; wait for the
+    // title to change before extracting (bounded so a permanent block
+    // doesn't hang the request).
+    const initialTitle = await page.evaluate(() => document.title || '');
+    if (CHALLENGE_TITLE_RE.test(initialTitle)) {
+      // Inline the regex inside the page function — Playwright's
+      // waitForFunction takes (pageFunction, arg, options); passing a
+      // RegExp across the boundary is awkward. Keep this list in sync
+      // with CHALLENGE_TITLE_RE above.
+      await page
+        .waitForFunction(
+          () =>
+            !/\b(?:just a moment|cloudflare|attention required|checking your browser|security check)\b/i.test(
+              document.title || '',
+            ),
+          null,
+          { timeout: CHALLENGE_WAIT_MS, polling: 500 },
+        )
+        .catch(() => null);
+    }
 
     const meta = await page.evaluate(() => {
       const get = (attr, name) =>
