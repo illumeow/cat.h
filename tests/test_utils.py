@@ -8,7 +8,7 @@ future refactor doesn't quietly change the contract.
 
 import logging
 
-from utils import parse_id_set
+from core.utils import parse_id_set
 
 
 def test_empty_string_returns_empty_set():

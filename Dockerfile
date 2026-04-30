@@ -25,7 +25,8 @@ ENV PYTHONUNBUFFERED=1 \
 WORKDIR /app
 
 COPY --from=builder /app/.venv /app/.venv
-COPY bot.py db.py mod_log.py utils.py ./
+COPY bot.py ./
+COPY core ./core
 COPY cogs ./cogs
 
 RUN useradd --create-home --shell /usr/sbin/nologin --uid 1000 bot \

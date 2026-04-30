@@ -11,8 +11,8 @@ import aiohttp
 import discord
 from discord.ext import commands
 
-import mod_log
-from utils import parse_id_set
+from core import mod_log
+from core.utils import parse_id_set
 
 if TYPE_CHECKING:
     from bot import Bot

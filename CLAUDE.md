@@ -17,7 +17,7 @@ For an at-a-glance overview see `README.md`; for operator setup see `docs/USAGE.
 ## Bot
 
 - Library: **discord.py** with the `message_content` privileged intent enabled (also requires the toggle in the Discord developer portal). Slash commands via `app_commands`, scheduled jobs via `discord.ext.tasks`.
-- Entry point: `bot.py` — a thin `commands.Bot` subclass that initializes the SQLite connection (`db.init_db()`), then calls `load_extension(...)` for each cog in `EXTENSIONS` and runs `tree.sync()` once in `setup_hook`. Run with `uv run python bot.py`. Syntax check with `uv run python -m py_compile bot.py db.py mod_log.py cogs/*.py`.
+- Entry point: `bot.py` — a thin `commands.Bot` subclass that initializes the SQLite connection (`db.init_db()`), then calls `load_extension(...)` for each cog in `EXTENSIONS` and runs `tree.sync()` once in `setup_hook`. Run with `uv run python bot.py`. Syntax check with `uv run python -m py_compile bot.py core/*.py cogs/*.py`.
 - Features live in `cogs/<feature>.py`. Each cog defines a `commands.Cog` subclass and an async `setup(bot)` function so `load_extension` can pick it up. **To add a new feature: create a new cog file, add its dotted path to the `EXTENSIONS` tuple in `bot.py`.** Don't grow `bot.py` itself.
 - Slash command groups belong as **class attributes** on the cog (e.g. `birthday = app_commands.Group(...)`), with subcommands decorated `@birthday.command(...)`. Tasks (`@tasks.loop`) are methods; start them in `__init__` and cancel in `cog_unload`.
 - Config is read from `.env` at startup via `load_dotenv()` in `bot.py` (see `.env.example`). Required: `DISCORD_TOKEN`. Feature-scoped vars (e.g. `BIRTHDAY_CHANNEL_ID`) are read at the top of the cog that uses them. Cross-cutting vars are named generically (e.g. `TIME_ZONE`, default `UTC`; `MOD_LOG_CHANNEL_ID`) so cogs can share them — name new env vars accordingly.
@@ -29,7 +29,7 @@ For an at-a-glance overview see `README.md`; for operator setup see `docs/USAGE.
 
 ## Persistence
 
-- One SQLite file: `data/bot.db`, accessed via `aiosqlite`. The schema lives in `db.py` (`CREATE TABLE IF NOT EXISTS …`); no migration framework — add `ALTER TABLE` statements directly when needed. See `docs/adr/0001-sqlite-for-all-state.md`.
+- One SQLite file: `data/bot.db`, accessed via `aiosqlite`. The schema lives in `core/db.py` (`CREATE TABLE IF NOT EXISTS …`); no migration framework — add `ALTER TABLE` statements directly when needed. See `docs/adr/0001-sqlite-for-all-state.md`.
 - The connection is opened in `Bot.setup_hook` and exposed as `bot.db` for cogs to use (`self.bot.db.execute(...)`).
 - Downloaded attachments live at `data/attachments/<message_id>/<filename>` (created on demand by the archive cog).
 - Everything under `data/` is git-ignored.
@@ -38,8 +38,8 @@ For an at-a-glance overview see `README.md`; for operator setup see `docs/USAGE.
 
 - `bot.suppressed_deletes: set[int]` — the link embedder cog adds a message ID before deleting the original (URL rewrite). The archive cog checks the set in `on_raw_message_delete` and **leaves the row's `deleted_at` NULL** because the webhook repost is now the user-facing message — the *intentional* deletion is whenever the repost itself is removed (❌ press, an admin deleting it via Discord's UI, etc.), at which point the link embedder's own listeners run `_finalize_repost(...)` to stamp `deleted_at` on the original (via the `original_message_id` it stored in `webhook_reposts`) and post the mod-log "Deleted" notice. The original `content` (the user's text with the un-cleaned URL) stays in the row so `/archive show` still reads it. The archive also skips the attachment download (URL rewrites are text-only) and the mod-log notice (the bot, not the user, caused this delete) — a `log.info` is emitted instead for terminal-level debugging. The set is in-memory only; bot restarts clear it (acceptable since suppression only matters within a single delete event).
 - `bot.recent_edit_mod_logs: dict[int, int]` — when the archive cog posts an "Edited" mod-log notice, it stores `original_message_id → mod_log_message_id` here. The link embedder pops the entry post-rewrite and re-targets the embed's jump URL at the webhook repost (the original is gone by then). Bounded to ~200 entries by archive's own oldest-first eviction; entries that the link embedder doesn't claim simply age out. Best-effort: if the archive's task hasn't inserted yet by the time the link embedder looks (rare scheduling order), the original URL stays stale — same fallback as no link embedder.
-- The mod-log embed builders live in `mod_log.py` so any cog can `import mod_log` and call `post_deleted` / `post_edited` with the same visual format. `post_edited` returns the sent `Message` so callers can update the embed later.
-- Cross-cog parsing helpers (currently just `parse_id_set` for comma-separated env-var ID lists) live in `utils.py` at the project root.
+- The mod-log embed builders live in `core/mod_log.py` so any cog can `from core import mod_log` and call `post_deleted` / `post_edited` with the same visual format. `post_edited` returns the sent `Message` so callers can update the embed later.
+- Cross-cog parsing helpers (currently just `parse_id_set` for comma-separated env-var ID lists) live in `core/utils.py`.
 
 ## Cogs
 

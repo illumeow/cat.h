@@ -6,7 +6,7 @@ short text passes through untouched; over-limit text is truncated with
 a suffix and the *total* length stays at exactly the limit.
 """
 
-from mod_log import truncate
+from core.mod_log import truncate
 
 # Mirror what callers use; if these change in production code, the
 # tests still describe the contract relative to whatever limit is passed.

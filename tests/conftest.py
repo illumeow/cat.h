@@ -36,7 +36,7 @@ async def fresh_db():
     migrations applied. Tests own the lifetime; fixture closes on exit."""
     import aiosqlite
 
-    import db as db_module
+    from core import db as db_module
 
     conn = await aiosqlite.connect(":memory:")
     await conn.execute("PRAGMA foreign_keys = ON;")

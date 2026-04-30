@@ -36,9 +36,10 @@ For the slash command reference and per-feature behavior, see **[docs/FEATURES.m
 ```
 .
 ├── bot.py              # entry point — commands.Bot subclass
-├── db.py               # shared aiosqlite connection + schema
-├── mod_log.py          # shared edit/delete embed builders
-├── utils.py            # tiny cross-cog helpers (parse_id_set)
+├── core/               # shared infra used by every cog
+│   ├── db.py           #   aiosqlite connection + schema + migrations
+│   ├── mod_log.py      #   edit/delete embed builders
+│   └── utils.py        #   tiny cross-cog helpers (parse_id_set)
 ├── cogs/
 │   ├── birthday.py
 │   ├── archive.py

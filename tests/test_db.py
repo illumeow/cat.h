@@ -20,7 +20,7 @@ Two flows worth pinning down:
 import aiosqlite
 import pytest
 
-import db
+from core import db
 
 
 async def _table_columns(conn: aiosqlite.Connection, table: str) -> set[str]:
