@@ -632,7 +632,10 @@ class ArchiveCog(commands.Cog):
                     f"• `{filename}` — not downloaded yet (message still live)"
                 )
 
-        content = "\n".join(notes) if notes else None
+        # Empty content is fine here: when there are no notes, `files` is
+        # always non-empty (we early-returned on `not rows`), so Discord still
+        # has something to render. Avoids passing None where Pylance expects str.
+        content = "\n".join(notes)
         try:
             await interaction.followup.send(
                 content=content,
