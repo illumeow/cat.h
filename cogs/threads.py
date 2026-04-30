@@ -277,6 +277,7 @@ class ThreadsCog(commands.Cog):
         await mod_log.post_deleted(
             self.bot,
             MOD_LOG_CHANNEL_ID,
+            message_id=payload.message_id,
             author_id=original_author_id,
             source_channel_id=channel_id,
             content=cleaned_content,
