@@ -35,6 +35,7 @@ async def post_deleted(
     bot,
     channel_id: int,
     *,
+    message_id: int,
     author_id: int,
     source_channel_id: int,
     content: str | None,
@@ -47,6 +48,7 @@ async def post_deleted(
     )
     embed.add_field(name="User", value=f"<@{author_id}>", inline=True)
     embed.add_field(name="Channel", value=f"<#{source_channel_id}>", inline=True)
+    embed.add_field(name="Message ID", value=f"`{message_id}`", inline=True)
     if attachments_summary:
         embed.add_field(
             name="Attachments",
@@ -60,12 +62,17 @@ async def post_edited(
     bot,
     channel_id: int,
     *,
+    guild_id: int,
+    message_id: int,
     author_id: int,
     source_channel_id: int,
     before: str | None,
     after: str | None,
 ) -> None:
-    embed = discord.Embed(title="Edited", color=discord.Color.gold())
+    jump_url = (
+        f"https://discord.com/channels/{guild_id}/{source_channel_id}/{message_id}"
+    )
+    embed = discord.Embed(title="Edited", url=jump_url, color=discord.Color.gold())
     embed.add_field(name="User", value=f"<@{author_id}>", inline=True)
     embed.add_field(name="Channel", value=f"<#{source_channel_id}>", inline=True)
     embed.add_field(
@@ -81,12 +88,18 @@ async def post_attachment_removed(
     bot,
     channel_id: int,
     *,
+    guild_id: int,
+    message_id: int,
     author_id: int,
     source_channel_id: int,
     attachments_summary: str,
 ) -> None:
+    jump_url = (
+        f"https://discord.com/channels/{guild_id}/{source_channel_id}/{message_id}"
+    )
     embed = discord.Embed(
         title="Attachment removed",
+        url=jump_url,
         color=discord.Color.orange(),
         description="User edited a message to remove an attachment; the bot pulled the bytes before the CDN URL expired.",
     )

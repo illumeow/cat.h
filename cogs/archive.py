@@ -129,8 +129,9 @@ class ArchiveCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_raw_message_edit(self, payload: discord.RawMessageUpdateEvent) -> None:
-        if payload.data.get("guild_id") is None:
-            return
+        guild_id = payload.guild_id
+        if guild_id is None:
+            return  # DM edit — narrows guild_id to int for the post_edited call
         # Channel-level exclusion before any DB work. Mod-log is in
         # EXCLUDED_CHANNELS automatically, so this short-circuits all edits
         # in mod-log too. The helper also matches a Discord thread whose
@@ -186,6 +187,8 @@ class ArchiveCog(commands.Cog):
                     await mod_log.post_attachment_removed(
                         self.bot,
                         MOD_LOG_CHANNEL_ID,
+                        guild_id=guild_id,
+                        message_id=payload.message_id,
                         author_id=author_id,
                         source_channel_id=payload.channel_id,
                         attachments_summary=summary,
@@ -213,6 +216,8 @@ class ArchiveCog(commands.Cog):
         await mod_log.post_edited(
             self.bot,
             MOD_LOG_CHANNEL_ID,
+            guild_id=guild_id,
+            message_id=payload.message_id,
             author_id=author_id,
             source_channel_id=payload.channel_id,
             before=prior_content,
@@ -271,6 +276,7 @@ class ArchiveCog(commands.Cog):
         await mod_log.post_deleted(
             self.bot,
             MOD_LOG_CHANNEL_ID,
+            message_id=payload.message_id,
             author_id=author_id,
             source_channel_id=payload.channel_id,
             content=content,
