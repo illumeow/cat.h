@@ -33,6 +33,7 @@ For an at-a-glance overview see `README.md`; for operator setup see `USAGE.md`; 
 
 - `bot.suppressed_deletes: set[int]` — the threads cog adds a message ID before deleting the original (link rewrite). The archive cog checks the set in `on_raw_message_delete` and **marks the row deleted in the DB** (so `/archive show <id>` still reports it accurately as deleted, with the original uncleaned URL preserved in `content`), but **skips both the attachment download and the mod-log notice**. The bot caused the delete, not the user, and the threads cog's URL rewrites are text-only so attachment preservation is unnecessary. A `log.info` is emitted instead, for terminal-level debugging. The set is in-memory only; bot restarts clear it (acceptable since suppression only matters within a single delete event).
 - The mod-log embed builders live in `mod_log.py` so any cog can `import mod_log` and call `post_deleted` / `post_edited` with the same visual format.
+- Cross-cog parsing helpers (currently just `parse_id_set` for comma-separated env-var ID lists) live in `utils.py` at the project root.
 
 ## Cogs
 

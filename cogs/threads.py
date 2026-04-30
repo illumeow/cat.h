@@ -8,6 +8,7 @@ import discord
 from discord.ext import commands
 
 import mod_log
+from utils import parse_id_set
 
 if TYPE_CHECKING:
     from bot import Bot
@@ -27,19 +28,7 @@ DELETE_EMOJI = "\N{CROSS MARK}"
 MOD_LOG_CHANNEL_ID = int(os.environ.get("MOD_LOG_CHANNEL_ID", "0"))
 
 
-def _parse_id_set(env_value: str) -> set[int]:
-    out: set[int] = set()
-    for part in env_value.split(","):
-        part = part.strip()
-        if part:
-            try:
-                out.add(int(part))
-            except ValueError:
-                log.warning("Ignoring non-integer ID %r in env list", part)
-    return out
-
-
-USER_EXCLUDED_CHANNELS = _parse_id_set(
+USER_EXCLUDED_CHANNELS = parse_id_set(
     os.environ.get("THREADS_EXCLUDED_CHANNELS", "")
 )
 # Mod-log channel is auto-excluded so the bot doesn't rewrite links posted
