@@ -7,3 +7,16 @@ dependencies = [
     "discord-py>=2.4",
     "python-dotenv>=1.0",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+    "pytest-asyncio>=1.3.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Plain `def` tests for sync code; mark async tests with @pytest.mark.asyncio
+# (we use the strict mode so unmarked async tests fail loudly rather than
+# silently passing because they were never awaited).
+asyncio_mode = "strict"
