@@ -62,9 +62,28 @@ async function getBrowser() {
   return browserLaunching;
 }
 
+// Resource types we never need to read OG metadata. Blocking them keeps
+// each probe fast (no image/font bytes) and lets `networkidle` settle
+// sooner. JS, XHR, and the document itself are still allowed — Threads
+// and IG hydrate their OG tags from JS, and Cloudflare's challenge
+// handshake runs in JS.
+const BLOCKED_RESOURCE_TYPES = new Set([
+  'image',
+  'font',
+  'media',
+  'stylesheet',
+]);
+
 async function probe(targetUrl) {
   const b = await getBrowser();
   const context = await b.newContext({ userAgent: USER_AGENT });
+  await context.route('**/*', (route) => {
+    if (BLOCKED_RESOURCE_TYPES.has(route.request().resourceType())) {
+      route.abort().catch(() => {});
+    } else {
+      route.continue().catch(() => {});
+    }
+  });
   const page = await context.newPage();
   try {
     await page.goto(targetUrl, {
