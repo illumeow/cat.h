@@ -75,3 +75,26 @@ async def post_edited(
         name="After", value=truncate(after, FIELD_VALUE_MAX), inline=False
     )
     await _send(bot, channel_id, embed)
+
+
+async def post_attachment_removed(
+    bot,
+    channel_id: int,
+    *,
+    author_id: int,
+    source_channel_id: int,
+    attachments_summary: str,
+) -> None:
+    embed = discord.Embed(
+        title="Attachment removed",
+        color=discord.Color.orange(),
+        description="User edited a message to remove an attachment; the bot pulled the bytes before the CDN URL expired.",
+    )
+    embed.add_field(name="User", value=f"<@{author_id}>", inline=True)
+    embed.add_field(name="Channel", value=f"<#{source_channel_id}>", inline=True)
+    embed.add_field(
+        name="Attachments",
+        value=truncate(attachments_summary, FIELD_VALUE_MAX),
+        inline=False,
+    )
+    await _send(bot, channel_id, embed)

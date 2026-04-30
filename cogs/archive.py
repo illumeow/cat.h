@@ -69,6 +69,17 @@ class ArchiveCog(commands.Cog):
 
     # --- helpers -----------------------------------------------------------
 
+    def _channel_or_parent_excluded(self, channel_id: int) -> bool:
+        """Exclusion check that respects the parent-of-Discord-thread rule.
+        Used by the raw edit/delete listeners which only receive the channel
+        ID; the in-memory channel cache resolves the parent for us."""
+        if channel_id in EXCLUDED_CHANNELS:
+            return True
+        chan = self.bot.get_channel(channel_id)
+        if isinstance(chan, discord.Thread) and chan.parent_id in EXCLUDED_CHANNELS:
+            return True
+        return False
+
     def _should_log(self, message: discord.Message) -> bool:
         # Caller is expected to have filtered DMs (message.guild is None).
         if message.is_system():
@@ -120,18 +131,70 @@ class ArchiveCog(commands.Cog):
     async def on_raw_message_edit(self, payload: discord.RawMessageUpdateEvent) -> None:
         if payload.data.get("guild_id") is None:
             return
-        if "content" not in payload.data:
-            return  # not a content edit (could be embed-only update)
-        new_content = payload.data["content"]
+        # Channel-level exclusion before any DB work. Mod-log is in
+        # EXCLUDED_CHANNELS automatically, so this short-circuits all edits
+        # in mod-log too. The helper also matches a Discord thread whose
+        # parent channel was added to the exclusion list after archive time.
+        if self._channel_or_parent_excluded(payload.channel_id):
+            return
+        # Discord's MESSAGE_UPDATE is partial: only changed fields are
+        # delivered. Skip events that touch neither content nor attachments
+        # (e.g. embed regeneration after a URL fetch, pin status changes).
+        has_content = "content" in payload.data
+        has_attachments = "attachments" in payload.data
+        if not has_content and not has_attachments:
+            return
 
         async with self.bot.db.execute(
-            "SELECT content, channel_id, author_id FROM messages WHERE id = ?",
+            "SELECT content, author_id FROM messages WHERE id = ?",
             (payload.message_id,),
         ) as cur:
             row = await cur.fetchone()
         if row is None:
             return
-        prior_content, channel_id, author_id = row
+        prior_content, author_id = row
+
+        # 1) Attachment removal — eagerly download anything the user dropped
+        # before its CDN URL stops resolving. We compare URL paths (ignoring
+        # the rotating signed query params) against still-pending DB rows;
+        # already-saved or already-skipped rows are excluded so we don't
+        # re-fire on a later edit.
+        if has_attachments:
+            payload_att_paths = {
+                a["url"].split("?", 1)[0] for a in payload.data["attachments"]
+            }
+            async with self.bot.db.execute(
+                "SELECT id, url FROM attachments "
+                "WHERE message_id = ? "
+                "AND local_path IS NULL AND skipped_reason IS NULL",
+                (payload.message_id,),
+            ) as cur:
+                pending = await cur.fetchall()
+            removed_db_ids = {
+                att_id
+                for att_id, url in pending
+                if url.split("?", 1)[0] not in payload_att_paths
+            }
+            if removed_db_ids:
+                await self._download_attachments(
+                    payload.message_id, restrict_to_db_ids=removed_db_ids
+                )
+                summary = await self._attachment_summary(
+                    payload.message_id, restrict_to_db_ids=removed_db_ids
+                )
+                if summary is not None:
+                    await mod_log.post_attachment_removed(
+                        self.bot,
+                        MOD_LOG_CHANNEL_ID,
+                        author_id=author_id,
+                        source_channel_id=payload.channel_id,
+                        attachments_summary=summary,
+                    )
+
+        # 2) Text edit — record the prior version and post the live notice.
+        if not has_content:
+            return
+        new_content = payload.data["content"]
         if prior_content == new_content:
             return
 
@@ -147,13 +210,11 @@ class ArchiveCog(commands.Cog):
         )
         await self.bot.db.commit()
 
-        if channel_id in EXCLUDED_CHANNELS:
-            return
         await mod_log.post_edited(
             self.bot,
             MOD_LOG_CHANNEL_ID,
             author_id=author_id,
-            source_channel_id=channel_id,
+            source_channel_id=payload.channel_id,
             before=prior_content,
             after=new_content,
         )
@@ -163,23 +224,28 @@ class ArchiveCog(commands.Cog):
         self, payload: discord.RawMessageDeleteEvent
     ) -> None:
         # Cross-cog handshake: bot-initiated deletes (e.g. the threads cog
-        # rewriting a link) are pre-registered. We still mark them deleted in
-        # the DB (the message *was* deleted; that's the truth) and still
-        # download attachments, but we skip the mod-log notice — the user
-        # didn't initiate the delete, the bot did.
+        # rewriting a link) are pre-registered. We mark the row deleted to
+        # keep the archive accurate, but skip both the attachment download
+        # and the mod-log notice — the bot caused the delete, not the user,
+        # and the original content (text URL) is already preserved in the
+        # row's `content` field.
         suppress_mod_log = payload.message_id in self.bot.suppressed_deletes
-        if suppress_mod_log:
-            self.bot.suppressed_deletes.discard(payload.message_id)
+        self.bot.suppressed_deletes.discard(payload.message_id)
+
+        # Channel-level exclusion before any DB or disk work. Helper also
+        # catches Discord-thread parents added to the exclusion list after
+        # the message was archived.
+        if self._channel_or_parent_excluded(payload.channel_id):
+            return
 
         async with self.bot.db.execute(
-            "SELECT channel_id, author_id, content, deleted_at "
-            "FROM messages WHERE id = ?",
+            "SELECT author_id, content, deleted_at FROM messages WHERE id = ?",
             (payload.message_id,),
         ) as cur:
             row = await cur.fetchone()
         if row is None:
             return
-        channel_id, author_id, content, already_deleted = row
+        author_id, content, already_deleted = row
         if already_deleted is not None:
             return  # double-delete event (shouldn't happen, but be safe)
 
@@ -190,30 +256,23 @@ class ArchiveCog(commands.Cog):
         )
         await self.bot.db.commit()
 
-        downloaded = await self._download_attachments(payload.message_id)
-
         if suppress_mod_log:
-            return
-        if channel_id in EXCLUDED_CHANNELS:
+            log.info(
+                "Suppressed delete for message %s in channel %s "
+                "(bot-initiated; row marked deleted, attachments not saved)",
+                payload.message_id,
+                payload.channel_id,
+            )
             return
 
-        attachments_summary = None
-        if downloaded:
-            lines = []
-            for filename, local_path, skipped_reason in downloaded:
-                if local_path:
-                    lines.append(f"• `{filename}` (saved)")
-                elif skipped_reason:
-                    lines.append(f"• `{filename}` ({skipped_reason})")
-                else:
-                    lines.append(f"• `{filename}`")
-            attachments_summary = "\n".join(lines)
+        await self._download_attachments(payload.message_id)
+        attachments_summary = await self._attachment_summary(payload.message_id)
 
         await mod_log.post_deleted(
             self.bot,
             MOD_LOG_CHANNEL_ID,
             author_id=author_id,
-            source_channel_id=channel_id,
+            source_channel_id=payload.channel_id,
             content=content,
             attachments_summary=attachments_summary,
         )
@@ -221,26 +280,46 @@ class ArchiveCog(commands.Cog):
     # --- attachment download ----------------------------------------------
 
     async def _download_attachments(
-        self, message_id: int
-    ) -> list[tuple[str, str | None, str | None]]:
-        """Returns list of (filename, local_path, skipped_reason) tuples."""
-        if self._http is None:
-            return []
+        self,
+        message_id: int,
+        restrict_to_db_ids: set[int] | None = None,
+    ) -> None:
+        """Download any attachments for this message that haven't yet been
+        processed (local_path and skipped_reason are both NULL). Idempotent —
+        rows already saved or skipped are left alone, so calling this from
+        both the edit handler (for removed attachments) and the delete
+        handler is safe and won't re-fetch the same file twice.
 
-        async with self.bot.db.execute(
-            "SELECT id, filename, url, size FROM attachments WHERE message_id = ?",
-            (message_id,),
-        ) as cur:
+        If restrict_to_db_ids is given, only those `attachments.id` rows are
+        considered; this lets the edit handler grab just the removed-from-
+        message attachments without prematurely downloading the still-live
+        ones (those stay lazy until the message is deleted).
+        """
+        if self._http is None:
+            return
+
+        sql = (
+            "SELECT id, filename, url, size FROM attachments "
+            "WHERE message_id = ? "
+            "AND local_path IS NULL AND skipped_reason IS NULL"
+        )
+        params: list[object] = [message_id]
+        if restrict_to_db_ids is not None:
+            if not restrict_to_db_ids:
+                return
+            placeholders = ",".join(["?"] * len(restrict_to_db_ids))
+            sql += f" AND id IN ({placeholders})"
+            params.extend(restrict_to_db_ids)
+
+        async with self.bot.db.execute(sql, params) as cur:
             rows = await cur.fetchall()
 
-        results: list[tuple[str, str | None, str | None]] = []
         for att_id, filename, url, size in rows:
             if size is not None and size > MAX_ATTACHMENT_BYTES:
                 await self.bot.db.execute(
                     "UPDATE attachments SET skipped_reason = ? WHERE id = ?",
                     ("too_large", att_id),
                 )
-                results.append((filename, None, "too_large"))
                 continue
 
             target_dir = ATTACHMENTS_DIR / str(message_id)
@@ -250,12 +329,10 @@ class ArchiveCog(commands.Cog):
             try:
                 async with self._http.get(url) as resp:
                     if resp.status != 200:
-                        reason = f"http_{resp.status}"
                         await self.bot.db.execute(
                             "UPDATE attachments SET skipped_reason = ? WHERE id = ?",
-                            (reason, att_id),
+                            (f"http_{resp.status}", att_id),
                         )
-                        results.append((filename, None, reason))
                         continue
                     with open(target_path, "wb") as f:
                         async for chunk in resp.content.iter_chunked(64 * 1024):
@@ -264,17 +341,48 @@ class ArchiveCog(commands.Cog):
                     "UPDATE attachments SET local_path = ? WHERE id = ?",
                     (str(target_path), att_id),
                 )
-                results.append((filename, str(target_path), None))
             except (aiohttp.ClientError, OSError):
                 log.exception("Attachment download failed for %s", url)
                 await self.bot.db.execute(
                     "UPDATE attachments SET skipped_reason = ? WHERE id = ?",
                     ("download_failed", att_id),
                 )
-                results.append((filename, None, "download_failed"))
 
         await self.bot.db.commit()
-        return results
+
+    async def _attachment_summary(
+        self,
+        message_id: int,
+        restrict_to_db_ids: set[int] | None = None,
+    ) -> str | None:
+        """Format the bullet list used in deletion / removal mod-log embeds
+        from the current state of the attachments table."""
+        sql = (
+            "SELECT filename, local_path, skipped_reason FROM attachments "
+            "WHERE message_id = ?"
+        )
+        params: list[object] = [message_id]
+        if restrict_to_db_ids is not None:
+            if not restrict_to_db_ids:
+                return None
+            placeholders = ",".join(["?"] * len(restrict_to_db_ids))
+            sql += f" AND id IN ({placeholders})"
+            params.extend(restrict_to_db_ids)
+
+        async with self.bot.db.execute(sql, params) as cur:
+            rows = await cur.fetchall()
+        if not rows:
+            return None
+
+        lines = []
+        for filename, local_path, skipped_reason in rows:
+            if local_path:
+                lines.append(f"• `{filename}` (saved)")
+            elif skipped_reason:
+                lines.append(f"• `{filename}` ({skipped_reason})")
+            else:
+                lines.append(f"• `{filename}`")
+        return "\n".join(lines)
 
     # --- TTL purge ---------------------------------------------------------
 

@@ -24,7 +24,7 @@ The `/archive` group is **hidden from every member by default** (`default_permis
 | `/archive deleted [user] [channel] [limit]` | List recent deleted messages, optionally filtered. Default limit 10, max 25. Ephemeral output |
 | `/archive show <message_id>` | Full detail: original content, every edit revision, deletion timestamp, attachment status. Ephemeral output |
 
-Independent of the commands, the bot posts a **live notice** in `MOD_LOG_CHANNEL_ID` every time a tracked message is edited (showing prior → new) or deleted (showing the final content + any attachments).
+Independent of the commands, the bot posts a **live notice** in `MOD_LOG_CHANNEL_ID` every time a tracked message is edited (showing prior → new), has an attachment removed (eagerly downloads it before the CDN URL expires), or is deleted (showing the final content + any attachments).
 
 Retention: **90 days from message creation**. The archive purges nightly at 03:00 in `TIME_ZONE` and removes both DB rows (cascading to edits and attachment metadata) and the on-disk attachment files at `data/attachments/<message_id>/`.
 
