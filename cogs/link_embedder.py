@@ -23,16 +23,20 @@ THREADS_URL_RE = re.compile(
     r"https?://(?:www\.)?threads\.(?:com|net)/[^\s?]+(?:\?\S*)?",
     re.IGNORECASE,
 )
-# Instagram URLs that carry an `igsh` share-tracker. Clean IG URLs (e.g.
-# plain /p/<code>/ links or ones that only carry meaningful params like
-# img_index) are left alone — only igsh-tagged ones trigger a rewrite.
-INSTAGRAM_IGSH_URL_RE = re.compile(
-    r"https?://(?:www\.)?instagram\.com/[^\s?]+\?\S*?\bigsh=[^\s&]*\S*",
+# All Instagram URLs. Discord's native IG embed is routinely broken
+# (missing image, wrong caption), so we always want a custom embed —
+# the rule fires regardless of params. The cleaner strips the `igsh`
+# share-tracker if present and is a no-op otherwise; other params
+# (e.g. `img_index` on a carousel) are preserved.
+INSTAGRAM_URL_RE = re.compile(
+    r"https?://(?:www\.)?instagram\.com/[^\s?]+(?:\?\S*)?",
     re.IGNORECASE,
 )
 # Dcard URLs carrying a `cid=…` campaign tracker (UUID) — produced by
-# the in-app "share" flow. Same posture as the Instagram rule: leave
-# clean dcard URLs alone, only act on tracker-tagged ones.
+# the in-app "share" flow. Narrow on purpose: clean Dcard URLs are
+# left alone (Discord's native auto-embed handles them, and Cloudflare
+# blocks our preview sidecar reliably enough that we'd just get "Just
+# a moment..." anyway). Only tracker-tagged URLs trigger a rewrite.
 DCARD_CID_URL_RE = re.compile(
     r"https?://(?:www\.)?dcard\.tw/[^\s?]+\?\S*?\bcid=[^\s&]*\S*",
     re.IGNORECASE,
@@ -119,7 +123,7 @@ def _strip_param(param: str) -> Callable[[str], str]:
 # platform = append a row.
 URL_RULES: list[tuple[str, re.Pattern[str], Callable[[str], str], bool]] = [
     ("threads", THREADS_URL_RE, _strip_query, True),
-    ("instagram", INSTAGRAM_IGSH_URL_RE, _strip_param("igsh"), True),
+    ("instagram", INSTAGRAM_URL_RE, _strip_param("igsh"), True),
     ("dcard", DCARD_CID_URL_RE, _strip_param("cid"), False),
 ]
 

@@ -5,7 +5,7 @@ state. The pieces under test:
 
 - `_strip_query` — drops the whole `?…` (used for threads.com)
 - `_strip_param("igsh")` — drops a single query param, keeps others
-  (used for instagram.com)
+  (used for instagram.com; no-op when the param isn't present)
 - `_apply_rule` — runs one regex+cleaner over a string and reports
   back the cleaned URLs it matched
 - `_rebuild_content` — folds over `URL_RULES`; this is the function
@@ -20,7 +20,7 @@ import re
 
 from cogs.link_embedder import (
     DCARD_CID_URL_RE,
-    INSTAGRAM_IGSH_URL_RE,
+    INSTAGRAM_URL_RE,
     THREADS_URL_RE,
     _apply_rule,
     _preview_eligible_urls,
@@ -157,19 +157,22 @@ def test_rebuild_content_instagram_with_igsh_strips_only_igsh():
     assert urls == ["https://www.instagram.com/reel/ABC/?img_index=2"]
 
 
-def test_rebuild_content_instagram_without_igsh_is_left_alone():
-    # IG rule is narrow on purpose: untracked IG URLs aren't reposted.
+def test_rebuild_content_instagram_without_igsh_still_triggers_rewrite():
+    # IG rule fires for every IG URL — Discord's native IG embed is
+    # routinely broken, so we always want a custom embed. Cleaner is a
+    # no-op (nothing to strip), so text is unchanged but the URL ends
+    # up in the matched list, telling the cog to repost.
     text = "https://www.instagram.com/p/ABC/?img_index=2"
     rebuilt, urls = _rebuild_content(text)
     assert rebuilt == text
-    assert urls == []
+    assert urls == ["https://www.instagram.com/p/ABC/?img_index=2"]
 
 
-def test_rebuild_content_plain_instagram_link_is_left_alone():
+def test_rebuild_content_plain_instagram_link_still_triggers_rewrite():
     text = "https://www.instagram.com/p/ABC/"
     rebuilt, urls = _rebuild_content(text)
     assert rebuilt == text
-    assert urls == []
+    assert urls == ["https://www.instagram.com/p/ABC/"]
 
 
 def test_rebuild_content_handles_mixed_threads_and_instagram_in_one_message():
@@ -192,24 +195,19 @@ def test_rebuild_content_handles_mixed_threads_and_instagram_in_one_message():
     ]
 
 
-def test_instagram_igsh_regex_does_not_match_clean_ig_url():
-    # Defends the gate: the regex is what decides "do anything," not
-    # the cleaner. A future tweak that loosens the regex needs to break
-    # this test, not slip in silently.
-    assert INSTAGRAM_IGSH_URL_RE.search("https://www.instagram.com/p/ABC/") is None
+def test_instagram_regex_matches_clean_and_tracked_urls():
+    # Regex is the gate. Clean URLs, URLs with real params, and URLs
+    # carrying the igsh share-tracker all need to match — the cleaner
+    # decides what (if anything) to strip.
+    assert INSTAGRAM_URL_RE.search("https://www.instagram.com/p/ABC/") is not None
     assert (
-        INSTAGRAM_IGSH_URL_RE.search(
-            "https://www.instagram.com/p/ABC/?img_index=2"
-        )
-        is None
+        INSTAGRAM_URL_RE.search("https://www.instagram.com/p/ABC/?img_index=2")
+        is not None
     )
-
-
-def test_instagram_igsh_regex_matches_url_with_igsh_param():
-    m = INSTAGRAM_IGSH_URL_RE.search(
-        "https://www.instagram.com/p/ABC/?igsh=hash"
+    assert (
+        INSTAGRAM_URL_RE.search("https://www.instagram.com/p/ABC/?igsh=hash")
+        is not None
     )
-    assert m is not None
 
 
 def test_threads_regex_matches_both_dotcom_and_dotnet_hosts():
