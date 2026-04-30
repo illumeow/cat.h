@@ -176,6 +176,43 @@ class LinkEmbedderCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
+        await self._process_message(message)
+
+    @commands.Cog.listener()
+    async def on_raw_message_edit(
+        self, payload: discord.RawMessageUpdateEvent
+    ) -> None:
+        # We also rewrite tracked links that the user adds via *edit* (e.g.
+        # they post "check this:" then paste an instagram link a moment
+        # later). MESSAGE_UPDATE is partial: skip events without a content
+        # field or without one of our patterns in it, so we don't pay an
+        # HTTP fetch on every embed-only / pin / etc. edit.
+        if payload.guild_id is None:
+            return
+        if "content" not in payload.data:
+            return
+        if self._channel_or_parent_excluded(payload.channel_id):
+            return
+        new_content = payload.data["content"]
+        if not new_content:
+            return
+        if not any(p.search(new_content) for _n, p, _c in URL_RULES):
+            return
+
+        channel = self.bot.get_channel(payload.channel_id)
+        if not isinstance(channel, discord.abc.Messageable):
+            return
+        try:
+            message = await channel.fetch_message(payload.message_id)
+        except discord.HTTPException:
+            return  # message gone, or no read perms — nothing we can do
+        await self._process_message(message)
+
+    async def _process_message(self, message: discord.Message) -> None:
+        """Apply URL rules to `message.content`; if any rule matched,
+        replace the message with a cleaned webhook repost. Shared between
+        on_message (initial posts) and on_raw_message_edit (edits that add
+        a tracked link)."""
         if message.guild is None:
             return
         if message.author.id == (self.bot.user.id if self.bot.user else 0):

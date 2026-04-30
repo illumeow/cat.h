@@ -31,7 +31,7 @@ Retention: **90 days from message creation**. The archive purges nightly at 03:0
 
 ## Link embedder
 
-No commands. When someone posts a tracked link from a supported platform, the bot:
+No commands. When someone **posts or edits a message to add** a tracked link from a supported platform, the bot:
 
 1. Cleans the platform's tracking params:
    - **Threads** (`threads.com` / `threads.net`): drops the entire `?…` query. Every threads link is reposted (even ones with no tracker) — Discord's threads embed re-fetches more reliably from a fresh post.
