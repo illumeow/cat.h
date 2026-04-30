@@ -50,14 +50,30 @@ CREATE TABLE IF NOT EXISTS attachments (
 CREATE INDEX IF NOT EXISTS idx_attachments_message ON attachments(message_id);
 
 CREATE TABLE IF NOT EXISTS webhook_reposts (
-    webhook_message_id  INTEGER PRIMARY KEY,
-    channel_id          INTEGER NOT NULL,
-    original_author_id  INTEGER NOT NULL,
-    cleaned_content     TEXT,
-    posted_at           INTEGER NOT NULL
+    webhook_message_id   INTEGER PRIMARY KEY,
+    channel_id           INTEGER NOT NULL,
+    original_author_id   INTEGER NOT NULL,
+    cleaned_content      TEXT,
+    posted_at            INTEGER NOT NULL,
+    -- ID of the user's original message (the one the bot deleted). Used
+    -- to surface a /archive-show-able ID in the mod-log "Deleted" notice
+    -- when the original poster reacts ❌. Nullable: rows written before
+    -- this column was added have no value.
+    original_message_id  INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_reposts_posted ON webhook_reposts(posted_at);
 """
+
+
+async def _migrate(conn: aiosqlite.Connection) -> None:
+    """Idempotent column additions for already-deployed databases. SQLite
+    has no ADD COLUMN IF NOT EXISTS, so we read the table pragma first."""
+    async with conn.execute("PRAGMA table_info(webhook_reposts)") as cur:
+        cols = {row[1] for row in await cur.fetchall()}
+    if "original_message_id" not in cols:
+        await conn.execute(
+            "ALTER TABLE webhook_reposts ADD COLUMN original_message_id INTEGER"
+        )
 
 
 async def init_db() -> aiosqlite.Connection:
@@ -68,5 +84,6 @@ async def init_db() -> aiosqlite.Connection:
     await conn.execute("PRAGMA journal_mode = WAL;")
     await conn.execute("PRAGMA foreign_keys = ON;")
     await conn.executescript(_SCHEMA)
+    await _migrate(conn)
     await conn.commit()
     return conn

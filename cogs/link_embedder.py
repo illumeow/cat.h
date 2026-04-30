@@ -291,12 +291,23 @@ class LinkEmbedderCog(commands.Cog):
             self.bot.suppressed_deletes.discard(message.id)
             log.exception("Failed to delete original message %s", message.id)
 
-        # Track for the confirm/delete reaction flow.
+        # Track for the confirm/delete reaction flow. We persist the user's
+        # original message ID alongside the webhook's so a later ❌ can show
+        # an /archive-show-able ID in the mod-log "Deleted" notice (the
+        # webhook repost itself isn't archived; the original is).
         await self.bot.db.execute(
             "INSERT INTO webhook_reposts "
             "(webhook_message_id, channel_id, original_author_id, "
-            "cleaned_content, posted_at) VALUES (?, ?, ?, ?, ?)",
-            (sent.id, message.channel.id, message.author.id, new_content, int(time_mod.time())),
+            "cleaned_content, posted_at, original_message_id) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                sent.id,
+                message.channel.id,
+                message.author.id,
+                new_content,
+                int(time_mod.time()),
+                message.id,
+            ),
         )
         await self.bot.db.commit()
 
@@ -368,14 +379,15 @@ class LinkEmbedderCog(commands.Cog):
             return
 
         async with self.bot.db.execute(
-            "SELECT channel_id, original_author_id, cleaned_content "
+            "SELECT channel_id, original_author_id, cleaned_content, "
+            "original_message_id "
             "FROM webhook_reposts WHERE webhook_message_id = ?",
             (payload.message_id,),
         ) as cur:
             row = await cur.fetchone()
         if row is None:
             return
-        channel_id, original_author_id, cleaned_content = row
+        channel_id, original_author_id, cleaned_content, original_message_id = row
 
         if payload.user_id != original_author_id:
             return  # only the original poster's reactions count
@@ -418,10 +430,16 @@ class LinkEmbedderCog(commands.Cog):
         )
         await self.bot.db.commit()
 
+        # Surface the user's *original* message ID in the mod-log Deleted
+        # embed (the webhook repost itself isn't archived, but the original
+        # is — so /archive show <id> works on this value). Legacy rows
+        # written before original_message_id existed fall back to the
+        # webhook ID; nothing's gained from /archive show on those, but it
+        # at least identifies the message that was deleted.
         await mod_log.post_deleted(
             self.bot,
             MOD_LOG_CHANNEL_ID,
-            message_id=payload.message_id,
+            message_id=original_message_id or payload.message_id,
             author_id=original_author_id,
             source_channel_id=channel_id,
             content=cleaned_content,

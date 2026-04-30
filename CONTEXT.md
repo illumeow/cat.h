@@ -28,7 +28,7 @@ _Avoid_: conflating with Moderator.
 A channel ID listed in `ARCHIVE_EXCLUDED_CHANNELS` (or in the cog-specific `LINK_EMBEDDER_EXCLUDED_CHANNELS`). The Archive (resp. Link embedder) feature does nothing in that channel. The Mod-log channel is auto-excluded from both without needing to be listed.
 
 **Webhook repost**:
-The bot's replacement for a user message that contained a tracked link from a supported platform (currently `threads.com` / `threads.net`, where the whole query is stripped, and `instagram.com` URLs carrying an `?igsh=…` share tracker, where only `igsh` is removed). The original is deleted; a webhook posts the cleaned version under the original poster's username and avatar. Tracked in the `webhook_reposts` table for 7 days so reactions can drive confirm/delete.
+The bot's replacement for a user message that contained a tracked link from a supported platform (currently `threads.com` / `threads.net`, where the whole query is stripped, and `instagram.com` URLs carrying an `?igsh=…` share tracker, where only `igsh` is removed). The original is deleted; a webhook posts the cleaned version under the original poster's username and avatar. Tracked in the `webhook_reposts` table for 7 days so reactions can drive confirm/delete; the row remembers the user's original message ID so a later ❌ surfaces an `/archive show`-able ID in the mod-log "Deleted" notice (the webhook repost itself isn't archived).
 _Avoid_: "rewrite", "fix" (vague).
 
 **Original poster**:
