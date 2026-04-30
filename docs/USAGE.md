@@ -86,13 +86,8 @@ Users with the **Administrator** server permission bypass these overrides and ca
 
 The bot is gateway-based (outbound websocket only) — no inbound ports, no public IP needed. Anywhere it can reach Discord works.
 
-**Free tiers that fit comfortably:**
-- **Oracle Cloud Always Free.** 4× ARM Ampere cores + 24 GB RAM (or 2× AMD x86 micros). Most generous free option, capacity occasionally tight.
-- **Google Cloud Always Free.** 1× `e2-micro` in `us-west1`/`us-central1`/`us-east1`. 1 GB RAM. Reliably available.
+For a step-by-step bring-up on Oracle Cloud Always Free (the recommended zero-cost path), see **[DEPLOY.md](./DEPLOY.md)**. The general shape on any Linux host with Docker:
 
-Either is roughly 10–100× the resources this bot needs. The Dockerfile builds for both architectures automatically (`python:3.14-slim` is multi-arch).
-
-**On the host:**
 ```sh
 git clone <repo>
 cd discord-bot
@@ -100,13 +95,7 @@ cp .env.example .env  # then edit
 docker compose up -d --build
 ```
 
-**Updates:**
-```sh
-git pull
-docker compose up -d --build
-```
-
-The bind-mounted `./data` directory is what persists; the container itself is disposable.
+Updates: `git pull && docker compose up -d --build`. The bind-mounted `./data` directory is what persists; the container itself is disposable. The Dockerfile is multi-arch (`python:3.14-slim`), so x86_64 and ARM64 hosts both work without changes.
 
 ## Reset
 
