@@ -77,6 +77,20 @@ class ThreadsCog(commands.Cog):
 
     # --- helpers -----------------------------------------------------------
 
+    def _channel_or_parent_excluded(self, channel_id: int) -> bool:
+        """Exclusion check that respects the parent-of-Discord-thread rule.
+        Listing a parent channel ID in THREADS_EXCLUDED_CHANNELS implicitly
+        excludes all of its threads via the in-memory channel cache."""
+        if channel_id in THREADS_EXCLUDED_CHANNELS:
+            return True
+        chan = self.bot.get_channel(channel_id)
+        if (
+            isinstance(chan, discord.Thread)
+            and chan.parent_id in THREADS_EXCLUDED_CHANNELS
+        ):
+            return True
+        return False
+
     def _webhook_name(self) -> str:
         bot_user = self.bot.user
         prefix = bot_user.name if bot_user else "Bot"
@@ -130,6 +144,13 @@ class ThreadsCog(commands.Cog):
         if not message.content:
             return
 
+        # Channel-level exclusion before any structural resolution. The
+        # helper resolves Discord threads back to their parent so listing a
+        # parent channel ID in THREADS_EXCLUDED_CHANNELS implicitly excludes
+        # all of its threads.
+        if self._channel_or_parent_excluded(message.channel.id):
+            return
+
         # Resolve the webhook-bearing parent channel and (optionally) the
         # Discord thread we need to post into. A webhook lives on a
         # TextChannel/ForumChannel; sending into a thread uses the thread=
@@ -144,13 +165,6 @@ class ThreadsCog(commands.Cog):
             thread = message.channel
         else:
             return  # voice/stage/uncategorized — nothing we can post into
-
-        # Excluded by either the channel itself or its parent (so listing a
-        # parent channel ID excludes all of its threads in one entry).
-        if message.channel.id in THREADS_EXCLUDED_CHANNELS:
-            return
-        if thread is not None and parent_channel.id in THREADS_EXCLUDED_CHANNELS:
-            return
 
         new_content, changed = _rebuild_content(message.content)
         if not changed:
