@@ -106,15 +106,21 @@ def _strip_param(param: str) -> Callable[[str], str]:
     return clean
 
 
-# Per-platform rewrite rules. Each entry: (name, pattern, cleaner). The
-# pattern decides what to act on — matching it triggers a webhook repost
-# of the cleaned text, even if the cleaner output is identical (some
-# embeds, e.g. threads.com, render more reliably from a fresh post).
-# Add a platform = append a row.
-URL_RULES: list[tuple[str, re.Pattern[str], Callable[[str], str]]] = [
-    ("threads", THREADS_URL_RE, _strip_query),
-    ("instagram", INSTAGRAM_IGSH_URL_RE, _strip_param("igsh")),
-    ("dcard", DCARD_CID_URL_RE, _strip_param("cid")),
+# Per-platform rewrite rules. Each entry: (name, pattern, cleaner,
+# preview). The pattern decides what to act on — matching it triggers a
+# webhook repost of the cleaned text, even if the cleaner output is
+# identical (some embeds, e.g. threads.com, render more reliably from a
+# fresh post). The `preview` flag controls whether we ask the preview
+# sidecar for OG metadata for these URLs and emit a custom embed:
+# False means "still rewrite the URL but skip the custom embed and
+# leave the URL un-wrapped so Discord's native auto-embed can try"
+# (used for Dcard, which sits behind a Cloudflare tier we can't reliably
+# bypass — the sidecar would just see "Just a moment..."). Add a
+# platform = append a row.
+URL_RULES: list[tuple[str, re.Pattern[str], Callable[[str], str], bool]] = [
+    ("threads", THREADS_URL_RE, _strip_query, True),
+    ("instagram", INSTAGRAM_IGSH_URL_RE, _strip_param("igsh"), True),
+    ("dcard", DCARD_CID_URL_RE, _strip_param("cid"), False),
 ]
 
 
@@ -140,10 +146,32 @@ def _rebuild_content(content: str) -> tuple[str, list[str]]:
     no rule fired (the cue to leave the message alone)."""
     rebuilt = content
     matched_urls: list[str] = []
-    for _name, pattern, cleaner in URL_RULES:
+    for _name, pattern, cleaner, _preview in URL_RULES:
         rebuilt, urls = _apply_rule(rebuilt, pattern, cleaner)
         matched_urls.extend(urls)
     return rebuilt, matched_urls
+
+
+def _preview_eligible_urls(content: str) -> list[str]:
+    """Cleaned URLs in `content` that belong to rules with preview=True.
+
+    This re-runs each preview-enabled rule's regex against the *original*
+    text (not the rebuilt text), because some rules' patterns require
+    the tracker query param (Instagram's `igsh`, Dcard's `cid`) that the
+    cleaner has already stripped — so matching a post-cleaned URL
+    against the same pattern would fail.
+
+    Distinct from `_rebuild_content`'s matched_urls (which is all
+    matches and drives the rewrite trigger): this filters out
+    preview=False rules so the cog can route only the right URLs to the
+    preview sidecar and to the `<…>` auto-embed-suppression wrap."""
+    out: list[str] = []
+    for _name, pattern, cleaner, preview in URL_RULES:
+        if not preview:
+            continue
+        for match in pattern.finditer(content):
+            out.append(cleaner(match.group(0)))
+    return out
 
 
 def _truncate_for_embed(s: str | None, limit: int) -> str | None:
@@ -323,7 +351,7 @@ class LinkEmbedderCog(commands.Cog):
         new_content = payload.data["content"]
         if not new_content:
             return
-        if not any(p.search(new_content) for _n, p, _c in URL_RULES):
+        if not any(p.search(new_content) for _n, p, _c, _pv in URL_RULES):
             return
 
         channel = self.bot.get_channel(payload.channel_id)
@@ -391,10 +419,14 @@ class LinkEmbedderCog(commands.Cog):
         # embeds would compete with (and double-render alongside) those.
         # We can't use suppress_embeds=True for this: it sets the message's
         # SUPPRESS_EMBEDS flag, which hides every embed including our own.
-        embeds = await self._build_preview_embeds(matched_urls)
+        # URLs from rules with preview=False (Dcard) are excluded from
+        # both the sidecar lookup and the wrapping — they stay bare so
+        # Discord's native auto-embed can still try.
+        preview_urls = _preview_eligible_urls(message.content)
+        embeds = await self._build_preview_embeds(preview_urls)
         body = new_content
         if embeds:
-            for url in set(matched_urls):
+            for url in set(preview_urls):
                 body = body.replace(url, f"<{url}>")
 
         # Post the rewritten copy first; if that fails we don't want to leave

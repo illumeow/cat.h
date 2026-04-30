@@ -36,7 +36,7 @@ No commands. When someone **posts or edits a message to add** a tracked link fro
 1. Cleans the platform's tracking params:
    - **Threads** (`threads.com` / `threads.net`): drops the entire `?…` query. Every threads link is reposted (even ones with no tracker) — Discord's threads embed re-fetches more reliably from a fresh post.
    - **Instagram** (`instagram.com`): drops only `igsh=…` from the query, keeping anything else like `img_index=2`. Plain IG links without `igsh` are left alone.
-   - **Dcard** (`dcard.tw`): drops only `cid=…` from the query (the campaign tracker added by the in-app share flow), keeping anything else. Plain Dcard links without `cid` are left alone.
+   - **Dcard** (`dcard.tw`): drops only `cid=…` from the query (the campaign tracker added by the in-app share flow), keeping anything else. Plain Dcard links without `cid` are left alone. **No custom embed** — Dcard sits behind a Cloudflare tier the preview sidecar can't reliably bypass, so the cleaned URL stays bare in the body and Discord's native auto-embed renders whatever it can.
 2. Deletes the original message
 3. Reposts the cleaned link via a per-channel webhook, using the original poster's username and avatar
 4. Calls the **preview sidecar** (`preview/`, a separate Playwright + Chromium service) to fetch OG metadata for the link, builds a custom Discord embed from it, and attaches that to the webhook — Discord's native Threads/IG embeds are usually broken or missing, so the bot generates its own. Discord's auto-embed is suppressed on the webhook send to avoid double-rendering. If the sidecar is down or `PREVIEW_SERVICE_URL` is unset, this step is skipped and the user just sees the cleaned URL with no custom embed

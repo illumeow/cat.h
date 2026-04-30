@@ -23,6 +23,7 @@ from cogs.link_embedder import (
     INSTAGRAM_IGSH_URL_RE,
     THREADS_URL_RE,
     _apply_rule,
+    _preview_eligible_urls,
     _rebuild_content,
     _strip_param,
     _strip_query,
@@ -277,6 +278,40 @@ def test_rebuild_content_clean_dcard_link_is_left_alone():
     rebuilt, urls = _rebuild_content(text)
     assert rebuilt == text
     assert urls == []
+
+
+# --- _preview_eligible_urls -------------------------------------------
+
+
+def test_preview_eligible_urls_includes_threads_and_instagram():
+    urls = _preview_eligible_urls(
+        "look at https://threads.com/post/abc?xmt=foo and "
+        "https://www.instagram.com/p/IG/?igsh=hash"
+    )
+    # Both rules have preview=True, so both cleaned URLs come back.
+    assert urls == [
+        "https://threads.com/post/abc",
+        "https://www.instagram.com/p/IG/",
+    ]
+
+
+def test_preview_eligible_urls_excludes_dcard():
+    """Dcard's rule has preview=False because Cloudflare blocks the
+    sidecar reliably. The URL is still cleaned by _rebuild_content for
+    the rewrite, but we don't ask the sidecar about it."""
+    urls = _preview_eligible_urls(
+        "ouch: https://www.dcard.tw/f/ntu/p/123?cid=eeb65574"
+    )
+    assert urls == []
+
+
+def test_preview_eligible_urls_only_returns_preview_enabled_in_mixed_message():
+    urls = _preview_eligible_urls(
+        "https://www.dcard.tw/f/ntu/p/1?cid=x and "
+        "https://threads.com/@u/post/2?xmt=y"
+    )
+    # Threads only — Dcard is filtered out.
+    assert urls == ["https://threads.com/@u/post/2"]
 
 
 # --- _truncate_for_embed ----------------------------------------------

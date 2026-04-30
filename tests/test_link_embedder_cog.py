@@ -266,6 +266,72 @@ async def test_build_preview_embeds_skips_cloudflare_challenge_page(
 
 
 @pytest.mark.asyncio
+async def test_process_message_dcard_url_skips_preview_and_wrapping(
+    fresh_db, monkeypatch
+):
+    """Dcard sits behind a Cloudflare tier we can't reliably bypass, so
+    custom embeds are off for that platform. The URL still gets cleaned
+    in the body (cid stripped) and the message still gets reposted by
+    the webhook — we just don't ask the sidecar about it and we don't
+    wrap the URL in <…>, so Discord's native auto-embed has a chance
+    to render whatever it can.
+    """
+    from cogs.link_embedder import LinkEmbedderCog
+
+    bot = make_bot_stub(db=fresh_db)
+    cog = LinkEmbedderCog(bot)
+    cog._http = object()
+    monkeypatch.setattr("cogs.link_embedder.PREVIEW_SERVICE_URL", "http://x")
+
+    fetch_calls: list[str] = []
+
+    async def fake_fetch(url: str):
+        fetch_calls.append(url)
+        return None
+
+    monkeypatch.setattr(cog, "_fetch_preview", fake_fetch)
+
+    msg = _build_text_message(
+        msg_id=42,
+        channel_id=200,
+        guild_id=100,
+        author_id=5,
+        content=(
+            "check https://www.dcard.tw/f/ntu/p/261398533"
+            "?cid=eeb65574-0784-49d8-b298-15b4ca089da2"
+        ),
+    )
+
+    sent = MagicMock()
+    sent.id = 9999
+    sent.add_reaction = AsyncMock()
+    webhook = MagicMock()
+    webhook.send = AsyncMock(return_value=sent)
+    monkeypatch.setattr(cog, "_get_webhook", AsyncMock(return_value=webhook))
+
+    msg.delete = AsyncMock()
+
+    await cog._process_message(msg)
+
+    # Sidecar must not be hit for Dcard URLs.
+    assert fetch_calls == [], (
+        f"Dcard URLs should bypass the preview sidecar; got calls: {fetch_calls}"
+    )
+
+    webhook.send.assert_awaited_once()
+    body = webhook.send.call_args.kwargs.get("content")
+    # Cleaned URL is in the body, with cid stripped.
+    assert "https://www.dcard.tw/f/ntu/p/261398533" in body
+    assert "cid=" not in body
+    # And critically, NOT wrapped in <…> — we want Discord's native
+    # auto-embed to be free to try.
+    assert "<https://www.dcard.tw/" not in body
+    # No custom embeds attached.
+    embeds_kwarg = webhook.send.call_args.kwargs.get("embeds")
+    assert not embeds_kwarg, f"expected no embeds, got {embeds_kwarg!r}"
+
+
+@pytest.mark.asyncio
 async def test_build_preview_embeds_keeps_real_page_with_challenge_word(
     fresh_db, monkeypatch
 ):
