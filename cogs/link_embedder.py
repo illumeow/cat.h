@@ -53,8 +53,8 @@ PREVIEW_TIMEOUT_S = 15
 # Platform brand-ish colors for the custom embed's left bar.
 PLATFORM_COLORS: dict[str, discord.Color] = {
     "threads": discord.Color.from_str("#000000"),
-    "instagram": discord.Color.from_str("#E1306C"),
-    "dcard": discord.Color.from_str("#00B5AD"),
+    "instagram": discord.Color.from_str("#CF4668"),
+    "dcard": discord.Color.from_str("#2C68A1"),
 }
 # Discord embed limits (we keep a small headroom under the hard caps).
 EMBED_TITLE_MAX = 250
