@@ -332,6 +332,49 @@ async def test_process_message_dcard_url_skips_preview_and_wrapping(
 
 
 @pytest.mark.asyncio
+async def test_build_preview_embeds_dedupes_duplicate_urls(
+    fresh_db, monkeypatch
+):
+    """If the same URL appears twice in a message (literally repeated,
+    or two URLs that clean to the same canonical form), the sidecar
+    must be hit at most once and at most one embed should come back —
+    otherwise the webhook send renders two identical previews
+    side-by-side, and we burn a redundant browser round-trip."""
+    from cogs.link_embedder import LinkEmbedderCog
+
+    bot = make_bot_stub(db=fresh_db)
+    cog = LinkEmbedderCog(bot)
+    cog._http = object()
+    monkeypatch.setattr("cogs.link_embedder.PREVIEW_SERVICE_URL", "http://x")
+
+    fetch_calls: list[str] = []
+
+    async def fake_fetch(url: str):
+        fetch_calls.append(url)
+        return {
+            "platform": "threads",
+            "url": url,
+            "title": "Real post",
+            "description": "Some content",
+            "image": "https://example/i.jpg",
+            "video": None,
+            "siteName": "Threads",
+        }
+
+    monkeypatch.setattr(cog, "_fetch_preview", fake_fetch)
+
+    duplicate = "https://threads.com/@u/post/abc"
+    embeds = await cog._build_preview_embeds([duplicate, duplicate, duplicate])
+
+    assert fetch_calls == [duplicate], (
+        f"sidecar should be hit once per unique URL; got {fetch_calls}"
+    )
+    assert len(embeds) == 1, (
+        f"duplicates should collapse to one embed; got {len(embeds)}"
+    )
+
+
+@pytest.mark.asyncio
 async def test_build_preview_embeds_keeps_real_page_with_challenge_word(
     fresh_db, monkeypatch
 ):

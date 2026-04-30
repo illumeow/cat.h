@@ -244,15 +244,22 @@ class LinkEmbedderCog(commands.Cog):
         """Hit the preview sidecar for each cleaned URL (in parallel) and
         turn the OG metadata into a Discord embed. Skip URLs where the
         sidecar has nothing useful or the call failed; cap at Discord's
-        10-embeds-per-message limit."""
+        10-embeds-per-message limit.
+
+        Duplicates in the input are collapsed (same URL, or two URLs
+        that clean to the same canonical form, only count as one) — no
+        point burning a redundant Chromium round-trip and no point
+        rendering two identical embeds side-by-side in the webhook."""
         if not urls or not PREVIEW_SERVICE_URL or self._http is None:
             return []
+        # Order-preserving dedupe so the embeds list keeps source order.
+        unique_urls = list(dict.fromkeys(urls))
         # Cap to 10 to match Discord's per-message embed limit.
         results = await asyncio.gather(
-            *(self._fetch_preview(u) for u in urls[:10])
+            *(self._fetch_preview(u) for u in unique_urls[:10])
         )
         embeds: list[discord.Embed] = []
-        for url, meta in zip(urls, results):
+        for url, meta in zip(unique_urls, results):
             if not meta:
                 continue
             title = _truncate_for_embed(meta.get("title"), EMBED_TITLE_MAX)
