@@ -19,6 +19,7 @@ rewrite pipeline don't quietly regress threads/instagram handling.
 import re
 
 from cogs.link_embedder import (
+    DCARD_CID_URL_RE,
     INSTAGRAM_IGSH_URL_RE,
     THREADS_URL_RE,
     _apply_rule,
@@ -214,6 +215,68 @@ def test_threads_regex_matches_both_dotcom_and_dotnet_hosts():
     assert THREADS_URL_RE.search("https://threads.com/post/abc") is not None
     assert THREADS_URL_RE.search("https://threads.net/post/abc") is not None
     assert THREADS_URL_RE.search("https://www.threads.com/post/abc") is not None
+
+
+# --- Dcard rule -------------------------------------------------------
+#
+# Mirror of the Instagram igsh pattern: dcard.tw URLs carry a campaign
+# tracker `cid=…` (UUID) when shared from inside the app or via certain
+# deeplinks. Only those URLs trigger a rewrite; clean URLs (and ones
+# carrying only meaningful params) are left alone, on the same logic
+# that drives the Instagram rule.
+
+
+def test_dcard_cid_regex_matches_url_with_cid_param():
+    m = DCARD_CID_URL_RE.search(
+        "https://www.dcard.tw/f/ntu/p/261398533?cid=eeb65574-0784-49d8-b298-15b4ca089da2"
+    )
+    assert m is not None
+
+
+def test_dcard_cid_regex_does_not_match_clean_dcard_url():
+    assert DCARD_CID_URL_RE.search("https://www.dcard.tw/f/ntu/p/261398533") is None
+    assert (
+        DCARD_CID_URL_RE.search("https://www.dcard.tw/f/ntu/p/261398533?utm=x")
+        is None
+    )
+
+
+def test_dcard_cid_regex_matches_with_or_without_www():
+    assert (
+        DCARD_CID_URL_RE.search(
+            "https://dcard.tw/f/ntu/p/261398533?cid=abc"
+        )
+        is not None
+    )
+    assert (
+        DCARD_CID_URL_RE.search(
+            "https://www.dcard.tw/f/ntu/p/261398533?cid=abc"
+        )
+        is not None
+    )
+
+
+def test_rebuild_content_dcard_url_with_cid_strips_only_cid():
+    rebuilt, urls = _rebuild_content(
+        "look: https://www.dcard.tw/f/ntu/p/261398533?cid=eeb65574"
+    )
+    assert rebuilt == "look: https://www.dcard.tw/f/ntu/p/261398533"
+    assert urls == ["https://www.dcard.tw/f/ntu/p/261398533"]
+
+
+def test_rebuild_content_dcard_url_keeps_other_params():
+    rebuilt, urls = _rebuild_content(
+        "https://www.dcard.tw/f/ntu/p/123?utm_source=share&cid=abc"
+    )
+    assert rebuilt == "https://www.dcard.tw/f/ntu/p/123?utm_source=share"
+    assert urls == ["https://www.dcard.tw/f/ntu/p/123?utm_source=share"]
+
+
+def test_rebuild_content_clean_dcard_link_is_left_alone():
+    text = "https://www.dcard.tw/f/ntu/p/261398533"
+    rebuilt, urls = _rebuild_content(text)
+    assert rebuilt == text
+    assert urls == []
 
 
 # --- _truncate_for_embed ----------------------------------------------

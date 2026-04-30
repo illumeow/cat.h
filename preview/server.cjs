@@ -24,6 +24,7 @@ const SUPPORTED_HOSTS = new Set([
   'threads.net', 'www.threads.net',
   'threads.com', 'www.threads.com',
   'instagram.com', 'www.instagram.com',
+  'dcard.tw', 'www.dcard.tw',
 ]);
 
 let browser = null;
@@ -108,6 +109,7 @@ function platformFromHost(host) {
     return 'threads';
   }
   if (matches(host, 'instagram.com')) return 'instagram';
+  if (matches(host, 'dcard.tw')) return 'dcard';
   return null;
 }
 

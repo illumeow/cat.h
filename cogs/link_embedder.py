@@ -30,6 +30,13 @@ INSTAGRAM_IGSH_URL_RE = re.compile(
     r"https?://(?:www\.)?instagram\.com/[^\s?]+\?\S*?\bigsh=[^\s&]*\S*",
     re.IGNORECASE,
 )
+# Dcard URLs carrying a `cid=…` campaign tracker (UUID) — produced by
+# the in-app "share" flow. Same posture as the Instagram rule: leave
+# clean dcard URLs alone, only act on tracker-tagged ones.
+DCARD_CID_URL_RE = re.compile(
+    r"https?://(?:www\.)?dcard\.tw/[^\s?]+\?\S*?\bcid=[^\s&]*\S*",
+    re.IGNORECASE,
+)
 
 WEBHOOK_NAME_SUFFIX = "Link Embedder"
 
@@ -47,6 +54,7 @@ PREVIEW_TIMEOUT_S = 15
 PLATFORM_COLORS: dict[str, discord.Color] = {
     "threads": discord.Color.from_str("#000000"),
     "instagram": discord.Color.from_str("#E1306C"),
+    "dcard": discord.Color.from_str("#00B5AD"),
 }
 # Discord embed limits (we keep a small headroom under the hard caps).
 EMBED_TITLE_MAX = 250
@@ -96,6 +104,7 @@ def _strip_param(param: str) -> Callable[[str], str]:
 URL_RULES: list[tuple[str, re.Pattern[str], Callable[[str], str]]] = [
     ("threads", THREADS_URL_RE, _strip_query),
     ("instagram", INSTAGRAM_IGSH_URL_RE, _strip_param("igsh")),
+    ("dcard", DCARD_CID_URL_RE, _strip_param("cid")),
 ]
 
 
