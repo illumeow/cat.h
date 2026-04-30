@@ -1,14 +1,17 @@
-"""Characterization tests for `utils.parse_id_set`.
+"""Characterization tests for `core.utils`.
 
-Pure function: takes a comma-separated string (typically from an env var)
-and returns a `set[int]`. Blank entries are ignored, non-integer entries
-are skipped with a warning. These tests pin down current behavior so a
-future refactor doesn't quietly change the contract.
+Pure functions:
+- `parse_id_set` — comma-separated env var → `set[int]`
+- `parse_bool_env` — env var string → bool, with a configurable default
+  for unset/empty values
+
+These tests pin down current behavior so a future refactor doesn't
+quietly change the contract.
 """
 
 import logging
 
-from core.utils import parse_id_set
+from core.utils import parse_bool_env, parse_id_set
 
 
 def test_empty_string_returns_empty_set():
@@ -52,3 +55,36 @@ def test_mixed_valid_invalid_keeps_only_valid():
     # Negative numbers are valid integers; keep them. (Discord IDs are
     # always positive, but the function is general-purpose.)
     assert parse_id_set("1, abc, 2, , -5, xyz") == {1, 2, -5}
+
+
+# --- parse_bool_env ---------------------------------------------------
+
+
+def test_parse_bool_env_unset_uses_default():
+    assert parse_bool_env(None, default=True) is True
+    assert parse_bool_env(None, default=False) is False
+
+
+def test_parse_bool_env_empty_string_uses_default():
+    # An operator who writes `FOO=` in .env probably means "leave default" —
+    # we don't want a stray empty value to silently flip a feature off.
+    assert parse_bool_env("", default=True) is True
+    assert parse_bool_env("", default=False) is False
+
+
+def test_parse_bool_env_falsy_values_are_false():
+    for raw in ("false", "FALSE", "False", "no", "NO", "0", "off", "OFF"):
+        assert parse_bool_env(raw, default=True) is False, raw
+
+
+def test_parse_bool_env_other_values_are_true():
+    # Default-deny on unknown strings would surprise: `FOO=true` is
+    # universal, but operators also write `FOO=1`, `FOO=yes`, `FOO=on`,
+    # or just `FOO=anything`. Treat anything not in the falsy set as true.
+    for raw in ("true", "TRUE", "yes", "1", "on", "enabled", "anything"):
+        assert parse_bool_env(raw, default=False) is True, raw
+
+
+def test_parse_bool_env_strips_whitespace():
+    assert parse_bool_env("  false  ", default=True) is False
+    assert parse_bool_env("\ttrue\n", default=False) is True

@@ -15,3 +15,18 @@ def parse_id_set(s: str) -> set[int]:
             except ValueError:
                 log.warning("Ignoring non-integer ID %r in env list", part)
     return out
+
+
+_FALSY = {"false", "no", "0", "off"}
+
+
+def parse_bool_env(raw: str | None, *, default: bool) -> bool:
+    """Parse an env-var-style boolean. Unset (`None`) or empty falls back
+    to `default`; `false`/`no`/`0`/`off` (case-insensitive, whitespace
+    trimmed) → False; anything else → True."""
+    if raw is None:
+        return default
+    stripped = raw.strip()
+    if not stripped:
+        return default
+    return stripped.lower() not in _FALSY

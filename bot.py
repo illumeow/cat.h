@@ -7,15 +7,21 @@ from discord.ext import commands
 from dotenv import load_dotenv
 
 from core import db
+from core.utils import parse_bool_env
 
 load_dotenv()
 
 TOKEN = os.environ.get("DISCORD_TOKEN", "")
 
-EXTENSIONS = (
-    "cogs.birthday",
-    "cogs.archive",
-    "cogs.link_embedder",
+# (dotted-path, env-var that gates loading). All default-enabled; an
+# operator opts out per cog by setting the var to `false`/`no`/`0`/`off`
+# in `.env`. Disabled cogs are skipped at startup — none of their event
+# listeners, slash commands, or task loops register, so they're truly
+# inert (a restart is needed to flip them back).
+EXTENSIONS: tuple[tuple[str, str], ...] = (
+    ("cogs.birthday", "BIRTHDAY_ENABLED"),
+    ("cogs.archive", "ARCHIVE_ENABLED"),
+    ("cogs.link_embedder", "LINK_EMBEDDER_ENABLED"),
 )
 
 log = logging.getLogger(__name__)
@@ -47,7 +53,10 @@ class Bot(commands.Bot):
 
     async def setup_hook(self) -> None:
         self.db = await db.init_db()
-        for ext in EXTENSIONS:
+        for ext, flag in EXTENSIONS:
+            if not parse_bool_env(os.environ.get(flag), default=True):
+                log.info("Skipping %s (disabled via %s)", ext, flag)
+                continue
             await self.load_extension(ext)
         await self.tree.sync()
 
