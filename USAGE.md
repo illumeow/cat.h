@@ -64,13 +64,21 @@ uv run python bot.py
 
 ## 4. Grant moderator access to `/archive` (one-time)
 
-`/archive` ships **hidden from every member by default** (the command sets `default_permissions=Permissions()` so Discord won't display it to anyone). After the bot is online, grant the moderator role access **once** via Discord's UI:
+`/archive` ships **hidden from every member by default** (the command sets `default_permissions=Permissions()` so Discord won't display it to anyone). After the bot is online, grant access via **Server Settings → Integrations → your bot**.
 
-1. **Server Settings → Integrations → your bot**
-2. Find `/archive` in the command list and click it.
-3. Under **Roles & Members**, add your `@Moderators` role with **Allow**.
+Discord's Integrations UI exposes **two levels** of permission, and the per-command override on `/archive` only takes effect once `@everyone` has been explicitly toggled at **both** levels — adding a per-command member/role override on its own is silently ignored.
+
+1. **Application-level** (top of the page, **Command Permissions**) → under **Roles & Members**, set `@everyone` to ✅ **Allow**. This keeps the rest of the bot (e.g. `/birthday`) open to everyone.
+2. **Per-command level** → scroll to **Commands**, click `/archive`, and in the **Modify Command Permissions** dialog:
+   - Set `@everyone` to ❌ **Deny**.
+   - Click **Add Roles or Members**, add your `@Moderators` role, and set it to ✅ **Allow**.
+3. **Click Save** in each dialog (the Save button is highlighted while changes are pending).
 
 Discord enforces this server-side — users without the role can't see or invoke the command, so this is the sole authorization gate. The override persists across bot restarts. Repeat per server if you ever invite the bot somewhere else.
+
+Users with the **Administrator** server permission bypass these overrides and can always run every command — that's a Discord built-in, not something the bot can restrict.
+
+> The mirror-image setup also works (app-level `@everyone` ❌, `/archive` override `@everyone` ✅), but it locks down the bot's other commands too. The setup above is the right one for keeping `/birthday` public while restricting `/archive`.
 
 ## Deployment notes
 
