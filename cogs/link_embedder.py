@@ -387,6 +387,33 @@ class LinkEmbedderCog(commands.Cog):
             log.exception("Webhook send failed in channel %s", message.channel.id)
             return
 
+        # Insert the tracking row BEFORE deleting the original. If the bot
+        # crashes between the webhook send and the original-delete, the
+        # worst case is a duplicate visible message (recoverable: user
+        # ❌'s the webhook, or manually deletes either copy). If we
+        # inserted *after* the delete instead, a crash there would leave
+        # a webhook repost in chat with no DB row, which the cog can't
+        # match against any reaction → ❌ silently no-ops forever. We
+        # persist the user's original message ID alongside the webhook's
+        # so a later ❌ can show an /archive-show-able ID in the mod-log
+        # "Deleted" notice (the webhook repost itself isn't archived;
+        # the original is).
+        await self.bot.db.execute(
+            "INSERT INTO webhook_reposts "
+            "(webhook_message_id, channel_id, original_author_id, "
+            "cleaned_content, posted_at, original_message_id) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                sent.id,
+                message.channel.id,
+                message.author.id,
+                new_content,
+                int(time_mod.time()),
+                message.id,
+            ),
+        )
+        await self.bot.db.commit()
+
         # Mark the original delete as bot-initiated so the archive cog
         # skips the mod-log notice. Then attempt the delete; on Forbidden
         # we keep the duplicate (signal to the operator to fix the
@@ -403,26 +430,6 @@ class LinkEmbedderCog(commands.Cog):
         except discord.HTTPException:
             self.bot.suppressed_deletes.discard(message.id)
             log.exception("Failed to delete original message %s", message.id)
-
-        # Track for the confirm/delete reaction flow. We persist the user's
-        # original message ID alongside the webhook's so a later ❌ can show
-        # an /archive-show-able ID in the mod-log "Deleted" notice (the
-        # webhook repost itself isn't archived; the original is).
-        await self.bot.db.execute(
-            "INSERT INTO webhook_reposts "
-            "(webhook_message_id, channel_id, original_author_id, "
-            "cleaned_content, posted_at, original_message_id) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (
-                sent.id,
-                message.channel.id,
-                message.author.id,
-                new_content,
-                int(time_mod.time()),
-                message.id,
-            ),
-        )
-        await self.bot.db.commit()
 
         try:
             await sent.add_reaction(CONFIRM_EMOJI)

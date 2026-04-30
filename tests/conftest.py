@@ -59,3 +59,26 @@ def no_task_loops(monkeypatch):
     from discord.ext import tasks
 
     monkeypatch.setattr(tasks.Loop, "start", lambda self, *a, **kw: None)
+
+
+def make_bot_stub(*, db):
+    """Build a minimal stand-in for `bot` that satisfies what the cogs
+    actually read: a db handle plus the cross-cog handshake containers.
+    Tests can mutate or replace any attribute as needed."""
+    from types import SimpleNamespace
+
+    from unittest.mock import MagicMock
+
+    bot_user = MagicMock()
+    bot_user.id = 1
+    bot_user.name = "TestBot"
+    bot_user.display_avatar = MagicMock()
+    bot_user.display_avatar.read = MagicMock()
+
+    return SimpleNamespace(
+        db=db,
+        user=bot_user,
+        suppressed_deletes=set(),
+        recent_edit_mod_logs={},
+        get_channel=MagicMock(return_value=None),
+    )
