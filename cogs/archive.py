@@ -631,21 +631,29 @@ class ArchiveCog(commands.Cog):
         # always non-empty (we early-returned on `not rows`), so Discord still
         # has something to render. Avoids passing None where Pylance expects str.
         content = "\n".join(notes)
+        # `discord.File(path, …)` opens the file at construction. Whether
+        # the upload succeeds, fails with HTTPException, or escapes with
+        # any other exception, every File instance has to be closed —
+        # otherwise we leak file descriptors on the unexpected-error path.
+        # close() is idempotent, so calling it after discord.py has
+        # already consumed the file is fine.
         try:
-            await interaction.followup.send(
-                content=content,
-                files=files,
-                ephemeral=True,
-                allowed_mentions=discord.AllowedMentions.none(),
-            )
-        except discord.HTTPException as exc:
+            try:
+                await interaction.followup.send(
+                    content=content,
+                    files=files,
+                    ephemeral=True,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+            except discord.HTTPException as exc:
+                await interaction.followup.send(
+                    f"Discord rejected the upload ({exc}). Files are still on "
+                    f"the bot host at `data/attachments/{mid}/`.",
+                    ephemeral=True,
+                )
+        finally:
             for f in files:
                 f.close()
-            await interaction.followup.send(
-                f"Discord rejected the upload ({exc}). Files are still on the "
-                f"bot host at `data/attachments/{mid}/`.",
-                ephemeral=True,
-            )
 
 
 async def setup(bot: "Bot") -> None:
