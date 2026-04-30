@@ -1,6 +1,6 @@
 # Features
 
-Slash commands and automatic behaviors, per cog. For setup and deployment see [USAGE.md](./USAGE.md); for internal architecture see [CLAUDE.md](./CLAUDE.md).
+Slash commands and automatic behaviors, per cog. For setup and deployment see [USAGE.md](./USAGE.md); for internal architecture see [CLAUDE.md](../CLAUDE.md).
 
 After the bot connects for the first time it runs `tree.sync()`. Discord can take up to an hour to refresh the slash command list in your client — if commands are missing, give it time or kick + re-invite the bot.
 
@@ -39,7 +39,7 @@ No commands. When someone **posts or edits a message to add** a tracked link fro
    - **Dcard** (`dcard.tw`): drops only `cid=…` from the query (the campaign tracker added by the in-app share flow), keeping anything else. Plain Dcard links without `cid` are left alone. **No custom embed** — Dcard sits behind a Cloudflare tier the preview sidecar can't reliably bypass, so the cleaned URL stays bare in the body and Discord's native auto-embed renders whatever it can.
 2. Deletes the original message
 3. Reposts the cleaned link via a per-channel webhook, using the original poster's username and avatar
-4. Calls the **preview sidecar** (`preview/`, a separate Playwright + Chromium service) to fetch OG metadata for the link, builds a custom Discord embed from it, and attaches that to the webhook — Discord's native Threads/IG embeds are usually broken or missing, so the bot generates its own. Discord's auto-embed is suppressed on the webhook send to avoid double-rendering. If the sidecar is down or `PREVIEW_SERVICE_URL` is unset, this step is skipped and the user just sees the cleaned URL with no custom embed
+4. For platforms with custom embeds enabled (Threads + Instagram), calls the **preview sidecar** (`preview/`, a separate Playwright + Chromium service) to fetch OG metadata, builds a custom Discord embed from it, and attaches that to the webhook — Discord's native Threads / IG embeds are usually broken or missing, so the bot generates its own. To stop Discord from rendering its own auto-embed alongside ours, the cleaned URL gets wrapped in `<…>` in the message body (Discord's per-URL escape for "don't auto-preview this link"). For Dcard (no custom embed), the URL stays bare so Discord can attempt its own native preview. If the sidecar is down or `PREVIEW_SERVICE_URL` is unset, the embed step is skipped and the URL also stays bare.
 5. Adds ✅ and ❌ reactions on the repost
 
 The **original poster** (and only the original poster) can:

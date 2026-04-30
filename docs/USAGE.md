@@ -1,6 +1,6 @@
 # Usage
 
-Operating guide for the bot — first-time setup, configuration, run, and deployment. For the slash command reference and per-feature behavior see [FEATURES.md](./FEATURES.md); for internal architecture see [CLAUDE.md](./CLAUDE.md); for domain language see [CONTEXT.md](./CONTEXT.md).
+Operating guide for the bot — first-time setup, configuration, run, and deployment. For the slash command reference and per-feature behavior see [FEATURES.md](./FEATURES.md); for internal architecture see [CLAUDE.md](../CLAUDE.md); for domain language see [CONTEXT.md](./CONTEXT.md).
 
 ## Prerequisites
 
