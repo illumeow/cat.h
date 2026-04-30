@@ -27,6 +27,7 @@ class Bot(commands.Bot):
     # in close() in case startup aborts before setup_hook runs.
     db: aiosqlite.Connection
     suppressed_deletes: set[int]
+    recent_edit_mod_logs: dict[int, int]
 
     def __init__(self) -> None:
         intents = discord.Intents.default()
@@ -37,6 +38,12 @@ class Bot(commands.Bot):
         # the link embedder rewriting a tracked URL), it adds the ID here
         # so the archive cog skips the mod-log notice for that delete.
         self.suppressed_deletes = set()
+        # Cross-cog handshake: archive maps original_message_id →
+        # mod_log_message_id after posting an "Edited" notice; the link
+        # embedder pops it post-rewrite to re-target the embed's jump URL
+        # at the webhook repost (the original is gone by then). Bounded by
+        # archive's own eviction.
+        self.recent_edit_mod_logs = {}
 
     async def setup_hook(self) -> None:
         self.db = await db.init_db()

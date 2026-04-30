@@ -16,19 +16,27 @@ def truncate(text: str | None, limit: int) -> str:
     return text[: limit - len("\n…(truncated)")] + "\n…(truncated)"
 
 
-async def _send(bot, channel_id: int, embed: discord.Embed) -> None:
+async def _send(
+    bot, channel_id: int, embed: discord.Embed
+) -> discord.Message | None:
     if channel_id == 0:
-        return
+        return None
     channel = bot.get_channel(channel_id)
     if channel is None:
         log.warning("Mod-log channel %s not in cache; skipping post.", channel_id)
-        return
+        return None
+    if not isinstance(channel, discord.abc.Messageable):
+        log.warning(
+            "Mod-log channel %s is not messageable; skipping post.", channel_id
+        )
+        return None
     try:
-        await channel.send(
+        return await channel.send(
             embed=embed, allowed_mentions=discord.AllowedMentions.none()
         )
     except discord.HTTPException:
         log.exception("Failed to post to mod-log channel %s", channel_id)
+        return None
 
 
 async def post_deleted(
@@ -68,7 +76,10 @@ async def post_edited(
     source_channel_id: int,
     before: str | None,
     after: str | None,
-) -> None:
+) -> discord.Message | None:
+    """Post an "Edited" mod-log notice. Returns the sent message so callers
+    that need to update the embed later (e.g. when a follow-up rewrite
+    invalidates the jump URL) can do so via `Message.edit`."""
     jump_url = (
         f"https://discord.com/channels/{guild_id}/{source_channel_id}/{message_id}"
     )
@@ -81,7 +92,7 @@ async def post_edited(
     embed.add_field(
         name="After", value=truncate(after, FIELD_VALUE_MAX), inline=False
     )
-    await _send(bot, channel_id, embed)
+    return await _send(bot, channel_id, embed)
 
 
 async def post_attachment_removed(

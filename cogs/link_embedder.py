@@ -206,13 +206,17 @@ class LinkEmbedderCog(commands.Cog):
             message = await channel.fetch_message(payload.message_id)
         except discord.HTTPException:
             return  # message gone, or no read perms — nothing we can do
-        await self._process_message(message)
+        await self._process_message(message, is_edit=True)
 
-    async def _process_message(self, message: discord.Message) -> None:
+    async def _process_message(
+        self, message: discord.Message, *, is_edit: bool = False
+    ) -> None:
         """Apply URL rules to `message.content`; if any rule matched,
         replace the message with a cleaned webhook repost. Shared between
         on_message (initial posts) and on_raw_message_edit (edits that add
-        a tracked link)."""
+        a tracked link). When `is_edit=True`, also re-target the archive
+        cog's just-posted "Edited" mod-log notice so the jump URL points
+        at the webhook repost rather than the now-deleted original."""
         if message.guild is None:
             return
         if message.author.id == (self.bot.user.id if self.bot.user else 0):
@@ -301,6 +305,53 @@ class LinkEmbedderCog(commands.Cog):
             await sent.add_reaction(DELETE_EMOJI)
         except discord.HTTPException:
             log.exception("Failed to seed reactions on webhook repost %s", sent.id)
+
+        # If this rewrite was triggered by an edit, the archive cog has just
+        # posted (or is about to post) an "Edited" mod-log notice whose jump
+        # URL points at the now-deleted original. Re-target it at the
+        # webhook repost so a moderator clicking through lands at the live
+        # message. Best-effort — if the archive entry isn't there yet (rare
+        # scheduling order) we just leave the URL stale.
+        if is_edit and message.guild is not None:
+            mod_log_msg_id = self.bot.recent_edit_mod_logs.pop(message.id, None)
+            if mod_log_msg_id is not None:
+                await self._retarget_edit_mod_log(
+                    mod_log_msg_id,
+                    repost_url=(
+                        f"https://discord.com/channels/{message.guild.id}/"
+                        f"{message.channel.id}/{sent.id}"
+                    ),
+                )
+
+    async def _retarget_edit_mod_log(
+        self, mod_log_message_id: int, *, repost_url: str
+    ) -> None:
+        """Edit the previously-posted "Edited" mod-log notice so its embed
+        URL points at the webhook repost. Called after we've replaced an
+        edited message; safe to no-op on any failure."""
+        if MOD_LOG_CHANNEL_ID == 0:
+            return
+        channel = self.bot.get_channel(MOD_LOG_CHANNEL_ID)
+        if not isinstance(channel, discord.abc.Messageable):
+            return
+        try:
+            mod_log_msg = await channel.fetch_message(mod_log_message_id)
+        except discord.HTTPException:
+            return
+        if not mod_log_msg.embeds:
+            return
+        embed = mod_log_msg.embeds[0]
+        if embed.title != "Edited":
+            return  # something else replaced the embed in the meantime
+        new_embed = embed.copy()
+        new_embed.url = repost_url
+        try:
+            await mod_log_msg.edit(embed=new_embed)
+        except discord.HTTPException:
+            log.exception(
+                "Failed to re-target Edited mod-log %s at webhook repost",
+                mod_log_message_id,
+            )
 
     # --- listener: ✅ / ❌ reactions ---------------------------------------
 

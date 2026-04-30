@@ -202,7 +202,7 @@ class ArchiveCog(commands.Cog):
         )
         await self.bot.db.commit()
 
-        await mod_log.post_edited(
+        sent = await mod_log.post_edited(
             self.bot,
             MOD_LOG_CHANNEL_ID,
             guild_id=guild_id,
@@ -212,6 +212,14 @@ class ArchiveCog(commands.Cog):
             before=prior_content,
             after=new_content,
         )
+        # Hand the link embedder a way to re-target this notice's jump URL
+        # if it's about to rewrite the message. Insertion-ordered dict, so
+        # the oldest entries get evicted first when the cap is hit.
+        if sent is not None:
+            self.bot.recent_edit_mod_logs[payload.message_id] = sent.id
+            while len(self.bot.recent_edit_mod_logs) > 200:
+                oldest = next(iter(self.bot.recent_edit_mod_logs))
+                del self.bot.recent_edit_mod_logs[oldest]
 
     @commands.Cog.listener()
     async def on_raw_message_delete(
