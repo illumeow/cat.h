@@ -580,6 +580,75 @@ class ArchiveCog(commands.Cog):
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
+    @archive.command(
+        name="get", description="Re-upload archived attachments for a message"
+    )
+    @app_commands.describe(message_id="Discord message ID (right-click → Copy ID)")
+    async def archive_get(
+        self, interaction: discord.Interaction, message_id: str
+    ) -> None:
+        try:
+            mid = int(message_id)
+        except ValueError:
+            await interaction.response.send_message(
+                "That's not a valid message ID.", ephemeral=True
+            )
+            return
+
+        async with self.bot.db.execute(
+            "SELECT filename, local_path, skipped_reason "
+            "FROM attachments WHERE message_id = ?",
+            (mid,),
+        ) as cur:
+            rows = await cur.fetchall()
+
+        if not rows:
+            await interaction.response.send_message(
+                "No attachments archived for that message.", ephemeral=True
+            )
+            return
+
+        # Defer before opening files (sync I/O can block briefly) and before
+        # the upload itself (which may exceed the 3-second response window).
+        await interaction.response.defer(ephemeral=True)
+
+        files: list[discord.File] = []
+        notes: list[str] = []
+        for filename, local_path, skipped_reason in rows:
+            if local_path:
+                path = Path(local_path)
+                if path.exists():
+                    files.append(discord.File(path, filename=filename))
+                else:
+                    notes.append(
+                        f"• `{filename}` — DB says saved but file is missing on disk"
+                    )
+            elif skipped_reason:
+                notes.append(
+                    f"• `{filename}` — skipped at download time ({skipped_reason})"
+                )
+            else:
+                notes.append(
+                    f"• `{filename}` — not downloaded yet (message still live)"
+                )
+
+        content = "\n".join(notes) if notes else None
+        try:
+            await interaction.followup.send(
+                content=content,
+                files=files,
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        except discord.HTTPException as exc:
+            for f in files:
+                f.close()
+            await interaction.followup.send(
+                f"Discord rejected the upload ({exc}). Files are still on the "
+                f"bot host at `data/attachments/{mid}/`.",
+                ephemeral=True,
+            )
+
 
 async def setup(bot: "Bot") -> None:
     await bot.add_cog(ArchiveCog(bot))

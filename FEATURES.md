@@ -23,6 +23,7 @@ The `/archive` group is **hidden from every member by default** (`default_permis
 |---|---|
 | `/archive deleted [user] [channel] [limit]` | List recent deleted messages, optionally filtered. Default limit 10, max 25. Ephemeral output |
 | `/archive show <message_id>` | Full detail: original content, every edit revision, deletion timestamp, attachment status. Ephemeral output |
+| `/archive get <message_id>` | Re-upload saved attachments as an ephemeral reply, with a per-file note for anything skipped, missing on disk, or not yet downloaded. Falls back to pointing at `data/attachments/<id>/` on the host if Discord rejects the upload size |
 
 Independent of the commands, the bot posts a **live notice** in `MOD_LOG_CHANNEL_ID` every time a tracked message is edited (showing prior → new), has an attachment removed (eagerly downloads it before the CDN URL expires), or is deleted (showing the final content + any attachments).
 
