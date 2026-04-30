@@ -541,6 +541,17 @@ class LinkEmbedderCog(commands.Cog):
             "DELETE FROM webhook_reposts WHERE webhook_message_id = ?",
             (payload.message_id,),
         )
+        # Stamp messages.deleted_at on the *original* row at this moment —
+        # archive's on_raw_message_delete deferred it precisely so that this
+        # ❌ press is what /archive show reports as the deletion time. The
+        # `deleted_at IS NULL` guard makes this a no-op on legacy rows or
+        # any race where the row was already marked.
+        if original_message_id is not None:
+            await self.bot.db.execute(
+                "UPDATE messages SET deleted_at = ? "
+                "WHERE id = ? AND deleted_at IS NULL",
+                (int(time_mod.time()), original_message_id),
+            )
         await self.bot.db.commit()
 
         # Surface the user's *original* message ID in the mod-log Deleted

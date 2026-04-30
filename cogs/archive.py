@@ -229,11 +229,12 @@ class ArchiveCog(commands.Cog):
         self, payload: discord.RawMessageDeleteEvent
     ) -> None:
         # Cross-cog handshake: bot-initiated deletes (e.g. the link embedder
-        # rewriting a tracked URL) are pre-registered. We mark the row
-        # deleted to keep the archive accurate, but skip both the attachment
-        # download and the mod-log notice — the bot caused the delete, not
-        # the user, and the original content (text URL) is already preserved
-        # in the row's `content` field.
+        # rewriting a tracked URL) are pre-registered. From the user's POV
+        # the message is now alive via the webhook repost — the *intentional*
+        # deletion is when they press ❌ on it later. So we leave deleted_at
+        # NULL here; the link embedder's ❌ handler will set it then. We
+        # also skip the attachment download (URL rewrites are text-only) and
+        # the mod-log notice (the bot caused this delete, not the user).
         suppress_mod_log = payload.message_id in self.bot.suppressed_deletes
         self.bot.suppressed_deletes.discard(payload.message_id)
 
@@ -241,6 +242,15 @@ class ArchiveCog(commands.Cog):
         # catches Discord-thread parents added to the exclusion list after
         # the message was archived.
         if self._channel_or_parent_excluded(payload.channel_id):
+            return
+
+        if suppress_mod_log:
+            log.info(
+                "Suppressed delete for message %s in channel %s "
+                "(bot-initiated; deleted_at deferred until ❌, attachments not saved)",
+                payload.message_id,
+                payload.channel_id,
+            )
             return
 
         async with self.bot.db.execute(
@@ -260,15 +270,6 @@ class ArchiveCog(commands.Cog):
             (now, payload.message_id),
         )
         await self.bot.db.commit()
-
-        if suppress_mod_log:
-            log.info(
-                "Suppressed delete for message %s in channel %s "
-                "(bot-initiated; row marked deleted, attachments not saved)",
-                payload.message_id,
-                payload.channel_id,
-            )
-            return
 
         await self._download_attachments(payload.message_id)
         attachments_summary = await self._attachment_summary(payload.message_id)
