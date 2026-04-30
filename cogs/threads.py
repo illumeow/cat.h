@@ -2,7 +2,9 @@ import logging
 import os
 import re
 import time as time_mod
+from collections.abc import Callable
 from typing import TYPE_CHECKING
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import discord
 from discord.ext import commands
@@ -17,6 +19,13 @@ log = logging.getLogger(__name__)
 
 THREADS_URL_RE = re.compile(
     r"https?://(?:www\.)?threads\.(?:com|net)/[^\s?]+(?:\?\S*)?",
+    re.IGNORECASE,
+)
+# Instagram URLs that carry an `igsh` share-tracker. Clean IG URLs (e.g.
+# plain /p/<code>/ links or ones that only carry meaningful params like
+# img_index) are left alone — only igsh-tagged ones trigger a rewrite.
+INSTAGRAM_IGSH_URL_RE = re.compile(
+    r"https?://(?:www\.)?instagram\.com/[^\s?]+\?\S*?\bigsh=[^\s&]*\S*",
     re.IGNORECASE,
 )
 
@@ -39,29 +48,66 @@ EXCLUDED_CHANNELS = USER_EXCLUDED_CHANNELS | (
 
 
 def _strip_query(url: str) -> str:
+    """Drop the entire `?…` query string."""
     q = url.find("?")
     return url[:q] if q != -1 else url
 
 
+def _strip_param(param: str) -> Callable[[str], str]:
+    """Build a cleaner that drops a single query param while preserving
+    the rest. Used when most params are meaningful and only one is a
+    tracker — e.g. Instagram's `igsh` alongside a real `img_index`."""
+
+    def clean(url: str) -> str:
+        parsed = urlparse(url)
+        if not parsed.query:
+            return url
+        kept = [
+            (k, v)
+            for k, v in parse_qsl(parsed.query, keep_blank_values=True)
+            if k != param
+        ]
+        return urlunparse(parsed._replace(query=urlencode(kept)))
+
+    return clean
+
+
+# Per-platform rewrite rules. Each entry: (name, pattern, cleaner). The
+# pattern decides what to act on — matching it triggers a webhook repost
+# of the cleaned text, even if the cleaner output is identical (some
+# embeds, e.g. threads.com, render more reliably from a fresh post).
+# Add a platform = append a row.
+URL_RULES: list[tuple[str, re.Pattern[str], Callable[[str], str]]] = [
+    ("threads", THREADS_URL_RE, _strip_query),
+    ("instagram", INSTAGRAM_IGSH_URL_RE, _strip_param("igsh")),
+]
+
+
+def _apply_rule(
+    text: str, pattern: re.Pattern[str], cleaner: Callable[[str], str]
+) -> tuple[str, bool]:
+    """Substitute every match of `pattern` in `text` with `cleaner(match)`.
+    Returns (rebuilt, matched_anything)."""
+    matched = False
+
+    def replace(m: re.Match[str]) -> str:
+        nonlocal matched
+        matched = True
+        return cleaner(m.group(0))
+
+    return pattern.sub(replace, text), matched
+
+
 def _rebuild_content(content: str) -> tuple[str, bool]:
-    """Returns (rebuilt, changed)."""
-    changed = False
-
-    def replace(match: re.Match[str]) -> str:
-        nonlocal changed
-        original = match.group(0)
-        cleaned = _strip_query(original)
-        if cleaned != original:
-            changed = True
-        return cleaned
-
-    new_content = THREADS_URL_RE.sub(replace, content)
-    # Even if every URL was already clean, if there were threads links we still
-    # want to repost so Discord re-fetches the OG metadata. Treat any match as
-    # a trigger.
-    if THREADS_URL_RE.search(content):
-        changed = True
-    return new_content, changed
+    """Apply each URL rule to the message text. Returns (rebuilt, triggered).
+    Triggered if any rule matched at least one URL — that's the cue to do
+    the webhook repost."""
+    rebuilt = content
+    triggered = False
+    for _name, pattern, cleaner in URL_RULES:
+        rebuilt, matched = _apply_rule(rebuilt, pattern, cleaner)
+        triggered = triggered or matched
+    return rebuilt, triggered
 
 
 class ThreadsCog(commands.Cog):

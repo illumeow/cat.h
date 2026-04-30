@@ -29,11 +29,13 @@ Independent of the commands, the bot posts a **live notice** in `MOD_LOG_CHANNEL
 
 Retention: **90 days from message creation**. The archive purges nightly at 03:00 in `TIME_ZONE` and removes both DB rows (cascading to edits and attachment metadata) and the on-disk attachment files at `data/attachments/<message_id>/`.
 
-## Threads.com embedder
+## Link embedder
 
-No commands. When someone posts a `threads.com` or `threads.net` link, the bot:
+No commands. When someone posts a tracked link from a supported platform, the bot:
 
-1. Strips tracking query params (`?xmt=…` etc.)
+1. Cleans the platform's tracking params:
+   - **Threads** (`threads.com` / `threads.net`): drops the entire `?…` query. Every threads link is reposted (even ones with no tracker) — Discord's threads embed re-fetches more reliably from a fresh post.
+   - **Instagram** (`instagram.com`): drops only `igsh=…` from the query, keeping anything else like `img_index=2`. Plain IG links without `igsh` are left alone.
 2. Deletes the original message
 3. Reposts the cleaned link via a per-channel webhook, using the original poster's username and avatar — so Discord renders an embed preview
 4. Adds ✅ and ❌ reactions on the repost
