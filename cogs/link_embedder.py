@@ -477,6 +477,55 @@ class LinkEmbedderCog(commands.Cog):
                 mod_log_message_id,
             )
 
+    # --- helpers: webhook repost teardown ---------------------------------
+
+    async def _finalize_repost(
+        self,
+        *,
+        webhook_message_id: int,
+        channel_id: int,
+        original_author_id: int,
+        cleaned_content: str | None,
+        original_message_id: int | None,
+    ) -> None:
+        """Run when a tracked webhook repost is going away (❌ press, manual
+        delete by an admin, original poster removing it themselves, etc.).
+        Drops the webhook_reposts row, stamps `messages.deleted_at` on the
+        user's original at this moment (the archive cog deferred it for
+        exactly this), and posts a mod-log "Deleted" notice.
+
+        Idempotent on the deleted_at update via the `deleted_at IS NULL`
+        guard. The webhook_reposts DELETE acts as the single point of
+        coordination between the ❌ path and the on_raw_message_delete
+        listener — whichever fires first removes the row, and the other's
+        lookup will see no row and no-op."""
+        await self.bot.db.execute(
+            "DELETE FROM webhook_reposts WHERE webhook_message_id = ?",
+            (webhook_message_id,),
+        )
+        if original_message_id is not None:
+            await self.bot.db.execute(
+                "UPDATE messages SET deleted_at = ? "
+                "WHERE id = ? AND deleted_at IS NULL",
+                (int(time_mod.time()), original_message_id),
+            )
+        await self.bot.db.commit()
+
+        # Surface the user's *original* message ID in the mod-log Deleted
+        # embed (the webhook repost itself isn't archived, but the original
+        # is — so /archive show <id> works on this value). Legacy rows
+        # written before original_message_id existed fall back to the
+        # webhook ID; nothing's gained from /archive show on those, but it
+        # at least identifies the message that was deleted.
+        await mod_log.post_deleted(
+            self.bot,
+            MOD_LOG_CHANNEL_ID,
+            message_id=original_message_id or webhook_message_id,
+            author_id=original_author_id,
+            source_channel_id=channel_id,
+            content=cleaned_content,
+        )
+
     # --- listener: ✅ / ❌ reactions ---------------------------------------
 
     @commands.Cog.listener()
@@ -532,41 +581,50 @@ class LinkEmbedderCog(commands.Cog):
             await self.bot.db.commit()
             return
 
-        # DELETE_EMOJI
+        # DELETE_EMOJI: finalize *before* deleting so the resulting
+        # MESSAGE_DELETE event finds no webhook_reposts row and the
+        # on_raw_message_delete listener no-ops (otherwise we'd post the
+        # mod-log notice twice).
+        await self._finalize_repost(
+            webhook_message_id=payload.message_id,
+            channel_id=channel_id,
+            original_author_id=original_author_id,
+            cleaned_content=cleaned_content,
+            original_message_id=original_message_id,
+        )
         try:
             await message.delete()
         except discord.HTTPException:
             log.exception("Failed to delete webhook repost %s", payload.message_id)
-        await self.bot.db.execute(
-            "DELETE FROM webhook_reposts WHERE webhook_message_id = ?",
-            (payload.message_id,),
-        )
-        # Stamp messages.deleted_at on the *original* row at this moment —
-        # archive's on_raw_message_delete deferred it precisely so that this
-        # ❌ press is what /archive show reports as the deletion time. The
-        # `deleted_at IS NULL` guard makes this a no-op on legacy rows or
-        # any race where the row was already marked.
-        if original_message_id is not None:
-            await self.bot.db.execute(
-                "UPDATE messages SET deleted_at = ? "
-                "WHERE id = ? AND deleted_at IS NULL",
-                (int(time_mod.time()), original_message_id),
-            )
-        await self.bot.db.commit()
 
-        # Surface the user's *original* message ID in the mod-log Deleted
-        # embed (the webhook repost itself isn't archived, but the original
-        # is — so /archive show <id> works on this value). Legacy rows
-        # written before original_message_id existed fall back to the
-        # webhook ID; nothing's gained from /archive show on those, but it
-        # at least identifies the message that was deleted.
-        await mod_log.post_deleted(
-            self.bot,
-            MOD_LOG_CHANNEL_ID,
-            message_id=original_message_id or payload.message_id,
-            author_id=original_author_id,
-            source_channel_id=channel_id,
-            content=cleaned_content,
+    # --- listener: webhook repost manually deleted ------------------------
+
+    @commands.Cog.listener()
+    async def on_raw_message_delete(
+        self, payload: discord.RawMessageDeleteEvent
+    ) -> None:
+        """Catch deletions of a tracked webhook repost from any source —
+        the ❌ reaction path, an admin removing it via the UI, the original
+        poster deleting it themselves, etc. — and run the same finalize
+        flow as ❌. The ❌ path runs `_finalize_repost` *before* it calls
+        `message.delete()`, so when the resulting MESSAGE_DELETE arrives
+        here the row is already gone and we no-op."""
+        async with self.bot.db.execute(
+            "SELECT channel_id, original_author_id, cleaned_content, "
+            "original_message_id "
+            "FROM webhook_reposts WHERE webhook_message_id = ?",
+            (payload.message_id,),
+        ) as cur:
+            row = await cur.fetchone()
+        if row is None:
+            return
+        channel_id, original_author_id, cleaned_content, original_message_id = row
+        await self._finalize_repost(
+            webhook_message_id=payload.message_id,
+            channel_id=channel_id,
+            original_author_id=original_author_id,
+            cleaned_content=cleaned_content,
+            original_message_id=original_message_id,
         )
 
 
