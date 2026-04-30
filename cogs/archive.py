@@ -217,12 +217,12 @@ class ArchiveCog(commands.Cog):
     async def on_raw_message_delete(
         self, payload: discord.RawMessageDeleteEvent
     ) -> None:
-        # Cross-cog handshake: bot-initiated deletes (e.g. the threads cog
-        # rewriting a link) are pre-registered. We mark the row deleted to
-        # keep the archive accurate, but skip both the attachment download
-        # and the mod-log notice — the bot caused the delete, not the user,
-        # and the original content (text URL) is already preserved in the
-        # row's `content` field.
+        # Cross-cog handshake: bot-initiated deletes (e.g. the link embedder
+        # rewriting a tracked URL) are pre-registered. We mark the row
+        # deleted to keep the archive accurate, but skip both the attachment
+        # download and the mod-log notice — the bot caused the delete, not
+        # the user, and the original content (text URL) is already preserved
+        # in the row's `content` field.
         suppress_mod_log = payload.message_id in self.bot.suppressed_deletes
         self.bot.suppressed_deletes.discard(payload.message_id)
 

@@ -13,14 +13,14 @@ Operating guide for the bot — first-time setup, configuration, run, and deploy
 1. Open https://discord.com/developers/applications → **New Application**.
 2. **Bot** tab:
    - Click **Reset Token**, copy the token immediately (it's shown once). This is `DISCORD_TOKEN` later.
-   - Under **Privileged Gateway Intents**, enable **Message Content Intent**. (Required for the archive cog to see message text and the threads cog to detect links.)
+   - Under **Privileged Gateway Intents**, enable **Message Content Intent**. (Required for the archive cog to see message text and the link embedder to detect tracked URLs.)
 3. **OAuth2 → URL Generator**:
    - Scopes: `bot`, `applications.commands`.
    - Bot Permissions:
      - View Channels, Send Messages, Embed Links, Read Message History, Add Reactions
-     - **Send Messages in Threads** — both archive notices and the threads embedder need this if any chat happens inside Discord threads
-     - **Manage Messages** — threads cog deletes the user's original to repost a cleaned version
-     - **Manage Webhooks** — threads cog creates a `<botname> Link Embedder` webhook per channel
+     - **Send Messages in Threads** — both archive notices and the link embedder need this if any chat happens inside Discord threads
+     - **Manage Messages** — the link embedder deletes the user's original to repost a cleaned version
+     - **Manage Webhooks** — the link embedder creates a `<botname> Link Embedder` webhook per channel
    - Copy the generated URL, open it, pick your server, **Authorize**.
 
 ## 2. Configure
@@ -36,9 +36,9 @@ Operating guide for the bot — first-time setup, configuration, run, and deploy
    | `DISCORD_TOKEN` | yes | From step 1 |
    | `TIME_ZONE` | recommended | IANA name (e.g. `Asia/Taipei`). Drives the 09:00 birthday announcement and the 03:00 archive purge |
    | `BIRTHDAY_CHANNEL_ID` | for birthday | Channel where the daily birthday message is posted |
-   | `MOD_LOG_CHANNEL_ID` | for archive / threads | Channel where edit / delete notices land. Auto-excluded from the archive (no recursion) |
+   | `MOD_LOG_CHANNEL_ID` | for archive / link embedder | Channel where edit / delete notices land. Auto-excluded from both the archive and the link embedder (no recursion) |
    | `ARCHIVE_EXCLUDED_CHANNELS` | optional | Channels the archive should completely ignore. Comma-separated. Listing a parent channel implicitly excludes all of its Discord threads |
-   | `THREADS_EXCLUDED_CHANNELS` | optional | Channels where the threads.com embedder shouldn't run. Comma-separated. Listing a parent channel implicitly excludes all of its Discord threads. The mod-log channel is auto-excluded |
+   | `LINK_EMBEDDER_EXCLUDED_CHANNELS` | optional | Channels where the link embedder shouldn't run. Comma-separated. Listing a parent channel implicitly excludes all of its Discord threads. The mod-log channel is auto-excluded |
 
    Authorization for `/archive` is **role-based** and configured in Discord's UI, not via an env var — see step 4 below.
 

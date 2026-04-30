@@ -38,7 +38,7 @@ MOD_LOG_CHANNEL_ID = int(os.environ.get("MOD_LOG_CHANNEL_ID", "0"))
 
 
 USER_EXCLUDED_CHANNELS = parse_id_set(
-    os.environ.get("THREADS_EXCLUDED_CHANNELS", "")
+    os.environ.get("LINK_EMBEDDER_EXCLUDED_CHANNELS", "")
 )
 # Mod-log channel is auto-excluded so the bot doesn't rewrite links posted
 # there — keep mod-log as a plain channel the bot only writes notices to.
@@ -110,7 +110,7 @@ def _rebuild_content(content: str) -> tuple[str, bool]:
     return rebuilt, triggered
 
 
-class ThreadsCog(commands.Cog):
+class LinkEmbedderCog(commands.Cog):
     def __init__(self, bot: "Bot") -> None:
         self.bot = bot
         self._webhook_cache: dict[int, discord.Webhook] = {}
@@ -119,8 +119,9 @@ class ThreadsCog(commands.Cog):
 
     def _channel_or_parent_excluded(self, channel_id: int) -> bool:
         """Exclusion check that respects the parent-of-Discord-thread rule.
-        Listing a parent channel ID in THREADS_EXCLUDED_CHANNELS implicitly
-        excludes all of its threads via the in-memory channel cache."""
+        Listing a parent channel ID in LINK_EMBEDDER_EXCLUDED_CHANNELS
+        implicitly excludes all of its threads via the in-memory channel
+        cache."""
         if channel_id in EXCLUDED_CHANNELS:
             return True
         chan = self.bot.get_channel(channel_id)
@@ -146,7 +147,7 @@ class ThreadsCog(commands.Cog):
             existing = await channel.webhooks()
         except discord.Forbidden:
             log.warning(
-                "Missing Manage Webhooks in channel %s; threads embedder disabled here",
+                "Missing Manage Webhooks in channel %s; link embedder disabled here",
                 channel.id,
             )
             return None
@@ -164,14 +165,14 @@ class ThreadsCog(commands.Cog):
             )
         except discord.Forbidden:
             log.warning(
-                "Cannot create webhook in channel %s; threads embedder disabled",
+                "Cannot create webhook in channel %s; link embedder disabled",
                 channel.id,
             )
             return None
         self._webhook_cache[channel.id] = created
         return created
 
-    # --- listener: rewrite threads links ----------------------------------
+    # --- listener: rewrite tracked links ----------------------------------
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
@@ -186,8 +187,8 @@ class ThreadsCog(commands.Cog):
 
         # Channel-level exclusion before any structural resolution. The
         # helper resolves Discord threads back to their parent so listing a
-        # parent channel ID in THREADS_EXCLUDED_CHANNELS implicitly excludes
-        # all of its threads.
+        # parent channel ID in LINK_EMBEDDER_EXCLUDED_CHANNELS implicitly
+        # excludes all of its threads.
         if self._channel_or_parent_excluded(message.channel.id):
             return
 
@@ -232,9 +233,10 @@ class ThreadsCog(commands.Cog):
             log.exception("Webhook send failed in channel %s", message.channel.id)
             return
 
-        # Mark the original delete as bot-initiated so the archive cog skips
-        # archiving + mod-log. Then attempt the delete; on Forbidden we keep
-        # the duplicate (signal to the operator to fix Manage Messages perm).
+        # Mark the original delete as bot-initiated so the archive cog
+        # skips the mod-log notice. Then attempt the delete; on Forbidden
+        # we keep the duplicate (signal to the operator to fix the
+        # Manage Messages perm).
         self.bot.suppressed_deletes.add(message.id)
         try:
             await message.delete()
@@ -339,4 +341,4 @@ class ThreadsCog(commands.Cog):
 
 
 async def setup(bot: "Bot") -> None:
-    await bot.add_cog(ThreadsCog(bot))
+    await bot.add_cog(LinkEmbedderCog(bot))

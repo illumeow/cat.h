@@ -15,7 +15,7 @@ TOKEN = os.environ.get("DISCORD_TOKEN", "")
 EXTENSIONS = (
     "cogs.birthday",
     "cogs.archive",
-    "cogs.threads",
+    "cogs.link_embedder",
 )
 
 log = logging.getLogger(__name__)
@@ -34,8 +34,8 @@ class Bot(commands.Bot):
         # command_prefix is unused (we only register slash commands) but is required.
         super().__init__(command_prefix="!", intents=intents)
         # Cross-cog handshake: when one cog deletes a message it owns (e.g.
-        # threads cog rewriting a link), it adds the ID here so the archive
-        # cog skips the corresponding on_raw_message_delete event.
+        # the link embedder rewriting a tracked URL), it adds the ID here
+        # so the archive cog skips the mod-log notice for that delete.
         self.suppressed_deletes = set()
 
     async def setup_hook(self) -> None:

@@ -31,7 +31,7 @@ For an at-a-glance overview see `README.md`; for operator setup see `USAGE.md`; 
 
 ## Cross-cog handshakes
 
-- `bot.suppressed_deletes: set[int]` — the threads cog adds a message ID before deleting the original (link rewrite). The archive cog checks the set in `on_raw_message_delete` and **marks the row deleted in the DB** (so `/archive show <id>` still reports it accurately as deleted, with the original uncleaned URL preserved in `content`), but **skips both the attachment download and the mod-log notice**. The bot caused the delete, not the user, and the threads cog's URL rewrites are text-only so attachment preservation is unnecessary. A `log.info` is emitted instead, for terminal-level debugging. The set is in-memory only; bot restarts clear it (acceptable since suppression only matters within a single delete event).
+- `bot.suppressed_deletes: set[int]` — the link embedder cog adds a message ID before deleting the original (URL rewrite). The archive cog checks the set in `on_raw_message_delete` and **marks the row deleted in the DB** (so `/archive show <id>` still reports it accurately as deleted, with the original uncleaned URL preserved in `content`), but **skips both the attachment download and the mod-log notice**. The bot caused the delete, not the user, and the link embedder's URL rewrites are text-only so attachment preservation is unnecessary. A `log.info` is emitted instead, for terminal-level debugging. The set is in-memory only; bot restarts clear it (acceptable since suppression only matters within a single delete event).
 - The mod-log embed builders live in `mod_log.py` so any cog can `import mod_log` and call `post_deleted` / `post_edited` with the same visual format.
 - Cross-cog parsing helpers (currently just `parse_id_set` for comma-separated env-var ID lists) live in `utils.py` at the project root.
 
@@ -39,22 +39,22 @@ For an at-a-glance overview see `README.md`; for operator setup see `USAGE.md`; 
 
 - **Birthday** (`cogs/birthday.py`): `/birthday` group (`set` / `remove` / `show`, `guild_only`) + daily 09:00 announcement in `BIRTHDAY_CHANNEL_ID`. `/birthday remove <user>` requires Discord-permission **Admin** (`Administrator` or `Manage Server`) to target someone else. Feb-29 falls back to Feb 28 in non-leap years. State in `birthdays` table.
 - **Archive** (`cogs/archive.py`): full-logging archive of every visible message (`messages` table) with edit history (`message_edits`) and downloaded attachments (`attachments`). Deletions / edits get a live notice posted to `MOD_LOG_CHANNEL_ID`. Skips DMs, system messages, webhook messages, channels in `ARCHIVE_EXCLUDED_CHANNELS`, and the mod-log channel itself (auto-excluded). On delete, attachments under 25 MB are downloaded to `data/attachments/<message_id>/`. Edit-time attachment removal is also detected (Discord delivers it as `MESSAGE_UPDATE`, not `MESSAGE_DELETE`) — when the bot sees an attachment that was in our DB but is no longer in the payload, it eagerly downloads the bytes from the still-hot CDN URL and posts an "Attachment removed" mod-log notice. The download helper (`_download_attachments`) is idempotent (filters on `local_path IS NULL AND skipped_reason IS NULL`), so the subsequent full-message delete won't re-fetch what was already saved. Daily 03:00 TTL purge drops anything older than 90 days. The `/archive` group is registered with `default_permissions=Permissions()` so it's hidden from every member by default; the server admin grants a moderator role access once via Server Settings → Integrations, and Discord enforces that gate at invocation time (no in-handler authorization check). See `docs/adr/0002-full-logging-archive.md`.
-- **Link embedder** (`cogs/threads.py`, file kept for git history; class still `ThreadsCog`): rewrites tracked links from supported platforms via the `URL_RULES` list at module top. Each rule is `(name, pattern, cleaner)`; matching the pattern is what triggers a repost, so `threads.com` (every URL → strip whole query) and `instagram.com` URLs with `?igsh=…` (only `igsh` removed, other params kept) coexist cleanly. Adding a platform = appending a row. The repost flow itself is platform-agnostic: per-channel webhook (cached, named `<bot> Link Embedder`) sends under the original poster's name and avatar; ✅ / ❌ reactions from the original poster commit / delete; ❌ also posts a mod-log "Deleted" notice. Tracking lives in `webhook_reposts` with a 7-day TTL. Excluded channels: `THREADS_EXCLUDED_CHANNELS`, plus the mod-log channel itself (auto-excluded so the bot leaves it as a plain audit feed).
+- **Link embedder** (`cogs/link_embedder.py`, class `LinkEmbedderCog`): rewrites tracked links from supported platforms via the `URL_RULES` list at module top. Each rule is `(name, pattern, cleaner)`; matching the pattern is what triggers a repost, so `threads.com` (every URL → strip whole query) and `instagram.com` URLs with `?igsh=…` (only `igsh` removed, other params kept) coexist cleanly. Adding a platform = appending a row. The repost flow itself is platform-agnostic: per-channel webhook (cached, named `<bot> Link Embedder`) sends under the original poster's name and avatar; ✅ / ❌ reactions from the original poster commit / delete; ❌ also posts a mod-log "Deleted" notice. Tracking lives in `webhook_reposts` with a 7-day TTL. Excluded channels: `LINK_EMBEDDER_EXCLUDED_CHANNELS`, plus the mod-log channel itself (auto-excluded so the bot leaves it as a plain audit feed).
 
 ## Permissions the bot needs in Discord
 
 - Read Messages, Send Messages (everywhere it's expected to function)
-- **Send Messages in Threads** (so the archive cog can post mod-log notices about thread activity, and the threads cog can post webhook reposts inside Discord threads)
-- **Manage Messages** (threads cog deletes original messages; without it, the original is left alongside the webhook repost as a fallback signal)
-- **Manage Webhooks** (threads cog creates/looks up the per-channel link embedder webhook on the parent channel)
-- Add Reactions (threads cog seeds ✅/❌)
+- **Send Messages in Threads** (so the archive cog can post mod-log notices about thread activity, and the link embedder can post webhook reposts inside Discord threads)
+- **Manage Messages** (link embedder deletes original messages; without it, the original is left alongside the webhook repost as a fallback signal)
+- **Manage Webhooks** (link embedder creates/looks up the per-channel `<bot> Link Embedder` webhook on the parent channel)
+- Add Reactions (link embedder seeds ✅/❌)
 - Read Message History (archive cog needs to fetch messages by ID for `/archive show`)
 
-## Discord threads vs. threads.com
+## Discord threads (sub-channels)
 
-The two share a name but are unrelated. **Discord threads** (sub-channels) are handled transparently:
+Don't confuse these with `threads.com` URLs (the Meta product) — different things; we handle Discord-thread sub-channels transparently across the codebase:
 - Archive logs messages from Discord threads like any other channel; `ARCHIVE_EXCLUDED_CHANNELS` matches against either the thread's own ID or its parent's ID (so listing a parent excludes all its threads).
-- The threads.com link rewriter also runs inside Discord threads — it gets the webhook from the *parent* channel (`message.channel.parent`) and posts back via `webhook.send(thread=message.channel)`.
+- The link embedder also runs inside Discord threads — it gets the webhook from the *parent* channel (`message.channel.parent`) and posts back via `webhook.send(thread=message.channel)`. `LINK_EMBEDDER_EXCLUDED_CHANNELS` follows the same parent-or-self matching as the archive.
 
 ## Deployment
 

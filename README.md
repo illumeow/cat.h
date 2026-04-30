@@ -40,7 +40,7 @@ mod_log.py          # shared edit/delete embed builders
 cogs/
   birthday.py
   archive.py
-  threads.py
+  link_embedder.py
 data/               # runtime state (gitignored): bot.db, attachments/
 docs/adr/           # architecture decision records
 Dockerfile
