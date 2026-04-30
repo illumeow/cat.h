@@ -27,11 +27,26 @@ const SUPPORTED_HOSTS = new Set([
 ]);
 
 let browser = null;
+// Tracks the in-flight chromium.launch promise so two requests racing
+// against the cold cache (or against a crashed browser) don't end up
+// spawning two Chromium instances and leaking the loser.
+let browserLaunching = null;
 
 async function getBrowser() {
   if (browser && browser.isConnected()) return browser;
-  browser = await chromium.launch({ headless: true });
-  return browser;
+  if (!browserLaunching) {
+    browserLaunching = (async () => {
+      try {
+        browser = await chromium.launch({ headless: true });
+        return browser;
+      } finally {
+        // Cleared on both success and failure so a failed launch is
+        // retryable on the next request rather than wedging us.
+        browserLaunching = null;
+      }
+    })();
+  }
+  return browserLaunching;
 }
 
 async function probe(targetUrl) {
@@ -85,10 +100,14 @@ async function probe(targetUrl) {
 }
 
 function platformFromHost(host) {
-  if (host.endsWith('threads.net') || host.endsWith('threads.com')) {
+  // `endsWith('threads.net')` would match `evilthreads.net` — anchor to
+  // the domain boundary so a future caller that drops the SUPPORTED_HOSTS
+  // gate doesn't open us up to subdomain spoofing for SSRF.
+  const matches = (h, domain) => h === domain || h.endsWith('.' + domain);
+  if (matches(host, 'threads.net') || matches(host, 'threads.com')) {
     return 'threads';
   }
-  if (host.endsWith('instagram.com')) return 'instagram';
+  if (matches(host, 'instagram.com')) return 'instagram';
   return null;
 }
 
