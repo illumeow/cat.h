@@ -39,8 +39,13 @@ def _parse_id_set(env_value: str) -> set[int]:
     return out
 
 
-THREADS_EXCLUDED_CHANNELS = _parse_id_set(
+USER_EXCLUDED_CHANNELS = _parse_id_set(
     os.environ.get("THREADS_EXCLUDED_CHANNELS", "")
+)
+# Mod-log channel is auto-excluded so the bot doesn't rewrite links posted
+# there — keep mod-log as a plain channel the bot only writes notices to.
+EXCLUDED_CHANNELS = USER_EXCLUDED_CHANNELS | (
+    {MOD_LOG_CHANNEL_ID} if MOD_LOG_CHANNEL_ID else set()
 )
 
 
@@ -81,12 +86,12 @@ class ThreadsCog(commands.Cog):
         """Exclusion check that respects the parent-of-Discord-thread rule.
         Listing a parent channel ID in THREADS_EXCLUDED_CHANNELS implicitly
         excludes all of its threads via the in-memory channel cache."""
-        if channel_id in THREADS_EXCLUDED_CHANNELS:
+        if channel_id in EXCLUDED_CHANNELS:
             return True
         chan = self.bot.get_channel(channel_id)
         if (
             isinstance(chan, discord.Thread)
-            and chan.parent_id in THREADS_EXCLUDED_CHANNELS
+            and chan.parent_id in EXCLUDED_CHANNELS
         ):
             return True
         return False

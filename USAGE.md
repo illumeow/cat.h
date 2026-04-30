@@ -38,7 +38,7 @@ Operating guide for the bot — first-time setup, configuration, run, and deploy
    | `BIRTHDAY_CHANNEL_ID` | for birthday | Channel where the daily birthday message is posted |
    | `MOD_LOG_CHANNEL_ID` | for archive / threads | Channel where edit / delete notices land. Auto-excluded from the archive (no recursion) |
    | `ARCHIVE_EXCLUDED_CHANNELS` | optional | Channels the archive should completely ignore. Comma-separated. Listing a parent channel implicitly excludes all of its Discord threads |
-   | `THREADS_EXCLUDED_CHANNELS` | optional | Channels where the threads.com embedder shouldn't run. Comma-separated. Listing a parent channel implicitly excludes all of its Discord threads |
+   | `THREADS_EXCLUDED_CHANNELS` | optional | Channels where the threads.com embedder shouldn't run. Comma-separated. Listing a parent channel implicitly excludes all of its Discord threads. The mod-log channel is auto-excluded |
 
    Authorization for `/archive` is **role-based** and configured in Discord's UI, not via an env var — see step 4 below.
 
