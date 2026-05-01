@@ -2,6 +2,8 @@
 
 Step-by-step for hosting this bot on an Oracle Cloud Always Free ARM Ampere VM. Oracle's free tier gives you up to 4 OCPUs / 24 GB RAM on `VM.Standard.A1.Flex` (ARM) forever — ~10× what this bot needs. For day-to-day operation (env vars, logs, reset, backup) see [USAGE.md](./USAGE.md); this file is just the one-time bring-up.
 
+If you already have a Linux machine you can put the bot on (lab workstation, home server, spare laptop) and you'd rather not provision a cloud VM, skip to [§9 — self-host with Podman or rootless Docker](#9-self-host-with-podman-or-rootless-docker).
+
 ## 0. Before you start
 
 You'll need:
@@ -104,7 +106,7 @@ The `./data` bind mount is where all state lives (`bot.db` + downloaded `attachm
 - **Console session timeouts.** Oracle's web console logs you out aggressively. Bookmark the *Instances* page for your compartment to skip the navigation each time.
 - **Inbound ports.** If you ever add an inbound HTTP service to the bot (none today), Oracle requires opening it in **two** places: the VCN's security list **and** Ubuntu's host iptables (Oracle pre-installs restrictive rules). Not relevant for the current gateway-only bot.
 
-## 8. Tearing it down
+## 8. Tearing down the Oracle deployment
 
 If you ever want to abandon the deployment:
 
@@ -113,3 +115,47 @@ docker compose down -v
 ```
 
 Then in the Oracle console: **Instances → ⋮ → Terminate**, check *Permanently delete the attached boot volume*. The VCN can stay (it's free); deleting it requires unwinding subnets / gateways manually.
+
+## 9. Self-host with Podman (or rootless Docker)
+
+For when you already have a Linux box and don't want to (or can't) install Docker system-wide. **Podman** runs containers rootless out of the box, ships preinstalled on Fedora and Asahi Fedora Remix, and reads our `docker-compose.yml` unchanged — no system packages, no `sudo` to install anything.
+
+Verify what's there:
+
+```sh
+podman --version       # 4.x+ has native `podman compose`
+which newuidmap        # required for user namespaces; preinstalled on Fedora
+```
+
+If `podman compose` errors on a 3.x Podman, install the Python wrapper into your home dir: `pip install --user podman-compose` (still rootless, still no system change). If Podman isn't installed at all and a sysadmin can't add it, fall back to rootless Docker: `curl -fsSL https://get.docker.com/rootless | sh` installs entirely under `~/bin` and `~/.local`.
+
+The one command that does need `sudo`, once:
+
+```sh
+sudo loginctl enable-linger $USER
+```
+
+Without lingering, your user-mode systemd exits when your last SSH session closes and the bot dies with it. Lingering keeps containers running across logouts and host reboots; `sudo loginctl disable-linger $USER` cleanly reverts. No other system-level change.
+
+Then it's the same shape as §4–§5 of the Oracle path — get GitHub to authenticate you, clone, fill `.env`, run.
+
+For a shared lab machine, the lightest-touch auth is **SSH agent forwarding** from your laptop: connect with `ssh -A user@host` (or `ForwardAgent yes` in `~/.ssh/config`) and your local key signs the GitHub clone without ever landing on disk on the lab box. You'll need agent forwarding active again whenever you `git pull` updates, so plan to always SSH in with `-A`. If you'd rather not depend on that, generate a per-host key and add the `.pub` to GitHub as a deploy key (**repo → Settings → Deploy keys**, no write access), same as §4 of the Oracle path. Heads-up on agent forwarding: anyone with root on the remote host can use the forwarded socket while you're connected — fine on a lab machine you trust, worth knowing on one you don't.
+
+```sh
+# from your laptop:
+ssh -A you@lab-machine
+
+# on the lab machine:
+git clone git@github.com:illumeow/cat.h.git discord-bot
+cd discord-bot
+cp .env.example .env && nano .env
+
+podman compose up -d --build
+podman compose logs -f bot
+```
+
+Day-to-day verbs translate one-for-one with the Docker path: `podman compose down`, `git pull && podman compose up -d --build` for updates. Same `./data` bind mount; same SQLite + attachments persistence story.
+
+**Harmless quirk** you'll notice: files in `./data/` written by the container show up on the host owned by a high-numbered UID. That's Podman remapping the container's `bot:bot` (uid 1000) through your user namespace via `newuidmap`. You can still read/write them — the parent `data/` is yours.
+
+**Teardown** is just `podman compose down -v` from the project directory. Nothing was installed at the system level, so there's nothing else to undo besides optionally `sudo loginctl disable-linger $USER`.
