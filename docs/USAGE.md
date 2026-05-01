@@ -17,10 +17,14 @@ Operating guide for the bot — first-time setup, configuration, run, and deploy
 3. **OAuth2 → URL Generator**:
    - Scopes: `bot`, `applications.commands`.
    - Bot Permissions:
-     - View Channels, Send Messages, Embed Links, Read Message History, Add Reactions
-     - **Send Messages in Threads** — both archive notices and the link embedder need this if any chat happens inside Discord threads
-     - **Manage Messages** — the link embedder deletes the user's original to repost a cleaned version
-     - **Manage Webhooks** — the link embedder creates a `<botname> Link Embedder` webhook per channel
+     - View Channels
+     - Send Messages
+     - Send Messages in Threads
+     - Embed Links
+     - Read Message History
+     - Add Reactions
+     - Manage Messages
+     - Manage Webhooks
    - Copy the generated URL, open it, pick your server, **Authorize**.
 
 ## 2. Configure
