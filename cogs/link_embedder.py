@@ -191,6 +191,16 @@ def _truncate_for_embed(s: str | None, limit: int) -> str | None:
     return s[: limit - 1].rstrip() + "…"
 
 
+def _is_instagram_reel(url: str) -> bool:
+    """Instagram reel `og:image`s have a play-button glyph baked in, but
+    the embed is a static image — we add a footer hint for reels so users
+    don't expect playback inside Discord."""
+    parsed = urlparse(url)
+    if not parsed.netloc.lower().endswith("instagram.com"):
+        return False
+    return parsed.path.startswith(("/reel/", "/reels/"))
+
+
 class LinkEmbedderCog(commands.Cog):
     def __init__(self, bot: "Bot") -> None:
         self.bot = bot
@@ -295,6 +305,8 @@ class LinkEmbedderCog(commands.Cog):
                 embed.set_author(name=meta["siteName"])
             if meta.get("image"):
                 embed.set_image(url=meta["image"])
+            if _is_instagram_reel(url):
+                embed.set_footer(text="Reel · cannot be played here")
             embeds.append(embed)
         return embeds
 
