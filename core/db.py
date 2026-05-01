@@ -2,7 +2,7 @@ from pathlib import Path
 
 import aiosqlite
 
-DATA_DIR = Path(__file__).resolve().parent / "data"
+DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 DB_PATH = DATA_DIR / "bot.db"
 
 _SCHEMA = """
