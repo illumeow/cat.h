@@ -22,6 +22,7 @@ from cogs.link_embedder import (
     DCARD_CID_URL_RE,
     INSTAGRAM_URL_RE,
     THREADS_URL_RE,
+    YOUTUBE_SI_URL_RE,
     _apply_rule,
     _preview_eligible_urls,
     _rebuild_content,
@@ -278,6 +279,89 @@ def test_rebuild_content_clean_dcard_link_is_left_alone():
     assert urls == []
 
 
+# --- YouTube rule -----------------------------------------------------
+#
+# Same posture as Dcard: only act on URLs carrying a share tracker
+# (`si=…` from the in-app share / "Copy link" flow). Clean YouTube
+# links are left alone — Discord's native player handles them inline,
+# so a custom embed adds nothing.
+
+
+def test_youtube_si_regex_matches_youtu_be_short_link():
+    assert (
+        YOUTUBE_SI_URL_RE.search("https://youtu.be/dQw4w9WgXcQ?si=share_token")
+        is not None
+    )
+
+
+def test_youtube_si_regex_matches_watch_url_with_si():
+    assert (
+        YOUTUBE_SI_URL_RE.search(
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ&si=share_token"
+        )
+        is not None
+    )
+
+
+def test_youtube_si_regex_matches_subdomains_and_shorts():
+    assert (
+        YOUTUBE_SI_URL_RE.search("https://m.youtube.com/watch?v=abc&si=t") is not None
+    )
+    assert (
+        YOUTUBE_SI_URL_RE.search("https://music.youtube.com/watch?v=abc&si=t")
+        is not None
+    )
+    assert (
+        YOUTUBE_SI_URL_RE.search("https://www.youtube.com/shorts/abc?si=xyz")
+        is not None
+    )
+
+
+def test_youtube_si_regex_does_not_match_clean_youtube_url():
+    assert YOUTUBE_SI_URL_RE.search("https://www.youtube.com/watch?v=abc") is None
+    assert YOUTUBE_SI_URL_RE.search("https://youtu.be/abc") is None
+
+
+def test_youtube_si_regex_does_not_falsematch_si_in_other_param():
+    # The literal "si=" appearing inside another param's value isn't a
+    # real share tracker — must not match.
+    assert (
+        YOUTUBE_SI_URL_RE.search(
+            "https://www.youtube.com/results?search_query=si=foo"
+        )
+        is None
+    )
+
+
+def test_rebuild_content_youtube_url_with_si_strips_only_si():
+    rebuilt, urls = _rebuild_content(
+        "watch: https://www.youtube.com/watch?v=abc&si=xyz"
+    )
+    assert rebuilt == "watch: https://www.youtube.com/watch?v=abc"
+    assert urls == ["https://www.youtube.com/watch?v=abc"]
+
+
+def test_rebuild_content_youtu_be_with_si_strips_to_clean_path():
+    rebuilt, urls = _rebuild_content("https://youtu.be/abc?si=share")
+    assert rebuilt == "https://youtu.be/abc"
+    assert urls == ["https://youtu.be/abc"]
+
+
+def test_rebuild_content_youtube_keeps_other_params():
+    rebuilt, urls = _rebuild_content(
+        "https://www.youtube.com/watch?v=abc&si=share&t=42"
+    )
+    assert rebuilt == "https://www.youtube.com/watch?v=abc&t=42"
+    assert urls == ["https://www.youtube.com/watch?v=abc&t=42"]
+
+
+def test_rebuild_content_clean_youtube_link_is_left_alone():
+    text = "https://www.youtube.com/watch?v=abc"
+    rebuilt, urls = _rebuild_content(text)
+    assert rebuilt == text
+    assert urls == []
+
+
 # --- _preview_eligible_urls -------------------------------------------
 
 
@@ -300,6 +384,13 @@ def test_preview_eligible_urls_excludes_dcard():
     urls = _preview_eligible_urls(
         "ouch: https://www.dcard.tw/f/ntu/p/123?cid=eeb65574"
     )
+    assert urls == []
+
+
+def test_preview_eligible_urls_excludes_youtube():
+    """YouTube's rule has preview=False because Discord's native player
+    embeds YouTube links inline — a custom OG embed adds nothing."""
+    urls = _preview_eligible_urls("https://youtu.be/abc?si=xyz")
     assert urls == []
 
 

@@ -41,6 +41,16 @@ DCARD_CID_URL_RE = re.compile(
     r"https?://(?:www\.)?dcard\.tw/[^\s?]+\?\S*?\bcid=[^\s&]*\S*",
     re.IGNORECASE,
 )
+# YouTube URLs carrying a `si=…` share tracker (added by the in-app
+# share / "Copy link" flow). Narrow on purpose: clean YouTube links
+# are left alone since Discord's native player embeds them inline.
+# `si=` must be a real query-param boundary (`?si=` or `&si=`) so a
+# URL like `?search_query=si=foo` doesn't false-match.
+YOUTUBE_SI_URL_RE = re.compile(
+    r"https?://(?:(?:www\.|m\.|music\.)?youtube\.com|youtu\.be)"
+    r"/[^\s?]+\?(?:[^\s&]*&)?si=[^\s&]*\S*",
+    re.IGNORECASE,
+)
 
 WEBHOOK_NAME_SUFFIX = "Link Embedder"
 
@@ -125,6 +135,7 @@ URL_RULES: list[tuple[str, re.Pattern[str], Callable[[str], str], bool]] = [
     ("threads", THREADS_URL_RE, _strip_query, True),
     ("instagram", INSTAGRAM_URL_RE, _strip_param("igsh"), True),
     ("dcard", DCARD_CID_URL_RE, _strip_param("cid"), False),
+    ("youtube", YOUTUBE_SI_URL_RE, _strip_param("si"), False),
 ]
 
 
