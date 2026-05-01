@@ -35,7 +35,7 @@ Operating guide for the bot — first-time setup, configuration, run, and deploy
    |---|---|---|
    | `DISCORD_TOKEN` | yes | From step 1 |
    | `TIME_ZONE` | recommended | IANA name (e.g. `Asia/Taipei`). Drives the 09:00 birthday announcement and the 03:00 archive purge |
-   | `BIRTHDAY_ENABLED` / `ARCHIVE_ENABLED` / `LINK_EMBEDDER_ENABLED` | optional | Per-cog feature toggle. Default: enabled. Set to `false` (also: `no`/`0`/`off`) to skip the cog at startup — its commands, listeners, and task loops won't register. Restart the bot to flip |
+   | `BIRTHDAY_ENABLED` / `ARCHIVE_ENABLED` / `LINK_EMBEDDER_ENABLED` | optional | Per-cog feature toggle. Default: enabled. Set to `false` to skip the cog at startup — its commands, listeners, and task loops won't register. Restart the bot to flip |
    | `BIRTHDAY_CHANNEL_ID` | for birthday | Channel where the daily birthday message is posted |
    | `MOD_LOG_CHANNEL_ID` | for archive / link embedder | Channel where edit / delete notices land. Auto-excluded from both the archive and the link embedder (no recursion) |
    | `ARCHIVE_EXCLUDED_CHANNELS` | optional | Channels the archive should completely ignore. Comma-separated. Listing a parent channel implicitly excludes all of its Discord threads |

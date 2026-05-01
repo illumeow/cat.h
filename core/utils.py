@@ -17,16 +17,13 @@ def parse_id_set(s: str) -> set[int]:
     return out
 
 
-_FALSY = {"false", "no", "0", "off"}
-
-
 def parse_bool_env(raw: str | None, *, default: bool) -> bool:
     """Parse an env-var-style boolean. Unset (`None`) or empty falls back
-    to `default`; `false`/`no`/`0`/`off` (case-insensitive, whitespace
-    trimmed) → False; anything else → True."""
+    to `default`; `false` (case-insensitive, whitespace trimmed) → False;
+    anything else → True."""
     if raw is None:
         return default
     stripped = raw.strip()
     if not stripped:
         return default
-    return stripped.lower() not in _FALSY
+    return stripped.lower() != "false"

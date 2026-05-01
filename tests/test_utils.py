@@ -72,16 +72,16 @@ def test_parse_bool_env_empty_string_uses_default():
     assert parse_bool_env("", default=False) is False
 
 
-def test_parse_bool_env_falsy_values_are_false():
-    for raw in ("false", "FALSE", "False", "no", "NO", "0", "off", "OFF"):
+def test_parse_bool_env_false_is_false():
+    for raw in ("false", "FALSE", "False"):
         assert parse_bool_env(raw, default=True) is False, raw
 
 
 def test_parse_bool_env_other_values_are_true():
-    # Default-deny on unknown strings would surprise: `FOO=true` is
-    # universal, but operators also write `FOO=1`, `FOO=yes`, `FOO=on`,
-    # or just `FOO=anything`. Treat anything not in the falsy set as true.
-    for raw in ("true", "TRUE", "yes", "1", "on", "enabled", "anything"):
+    # Only the literal word `false` flips the toggle off — keeps the
+    # contract obvious to a deployer skimming `.env`. Everything else,
+    # including would-be-falsy strings like `0`/`no`/`off`, stays true.
+    for raw in ("true", "TRUE", "yes", "1", "on", "no", "0", "off", "anything"):
         assert parse_bool_env(raw, default=False) is True, raw
 
 
