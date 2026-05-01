@@ -3,7 +3,12 @@ services:
     build: .
     env_file: .env
     volumes:
-      - ./data:/app/data
+      # `:U` tells podman to chown the bind-mount source to the container
+      # user (UID 1000 inside, mapped to a subuid on the host under
+      # rootless). Without it, the bot user inside the container can't
+      # read/write files that were created on the host (e.g. via
+      # `podman cp` or a fresh `mkdir`). Docker ignores the flag.
+      - ./data:/app/data:U
     restart: unless-stopped
     # Reach the preview sidecar by service name on the default compose
     # network. The bot tolerates the service being unreachable (falls
