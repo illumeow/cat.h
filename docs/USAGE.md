@@ -17,14 +17,16 @@ Operating guide for the bot — first-time setup, configuration, run, and deploy
 3. **OAuth2 → URL Generator**:
    - Scopes: `bot`, `applications.commands`.
    - Bot Permissions:
-     - View Channels
-     - Send Messages
-     - Send Messages in Threads
-     - Embed Links
-     - Read Message History
-     - Add Reactions
-     - Manage Messages
-     - Manage Webhooks
+     - General Permissions
+       - Manage Webhooks
+       - View Channels
+     - Text Permissions
+       - Send Messages
+       - Send Messages in Threads
+       - Manage Messages
+       - Embed Links
+       - Read Message History
+       - Add Reactions
    - Copy the generated URL, open it, pick your server, **Authorize**.
 
 ## 2. Configure
