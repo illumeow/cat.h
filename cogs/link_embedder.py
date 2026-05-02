@@ -631,10 +631,24 @@ class LinkEmbedderCog(commands.Cog):
             return
 
         if emoji == CONFIRM_EMOJI:
-            try:
-                await message.clear_reactions()
-            except discord.HTTPException:
-                log.exception("Failed to clear reactions on %s", payload.message_id)
+            # Remove only our own ✅ / ❌ and the poster's ✅; leave any
+            # third-party reactions intact so they remain visible.
+            poster = discord.Object(id=repost.original_author_id)
+            for target_emoji, member in (
+                (CONFIRM_EMOJI, self.bot.user),
+                (DELETE_EMOJI, self.bot.user),
+                (CONFIRM_EMOJI, poster),
+            ):
+                if member is None:
+                    continue
+                try:
+                    await message.remove_reaction(target_emoji, member)
+                except discord.HTTPException:
+                    log.exception(
+                        "Failed to remove %s reaction on %s",
+                        target_emoji,
+                        payload.message_id,
+                    )
             await webhook_reposts.delete(self.bot.db, payload.message_id)
             return
 
