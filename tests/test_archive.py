@@ -380,3 +380,232 @@ async def test_pending_attachments_restrict_empty_short_circuits(fresh_db):
     assert await archive.pending_attachments(
         fresh_db, 41, restrict_to_db_ids=set()
     ) == []
+
+
+import aiohttp
+
+
+class _FakeStream:
+    def __init__(self, body: bytes):
+        self._body = body
+
+    def iter_chunked(self, _size: int):
+        body = self._body
+
+        async def _gen():
+            yield body
+
+        return _gen()
+
+
+class _FakeResponse:
+    def __init__(self, status: int, body: bytes = b""):
+        self.status = status
+        self.content = _FakeStream(body)
+
+
+class _FakeGetCM:
+    def __init__(self, response=None, exc=None):
+        self._response = response
+        self._exc = exc
+
+    async def __aenter__(self):
+        if self._exc is not None:
+            raise self._exc
+        return self._response
+
+    async def __aexit__(self, *_args):
+        return False
+
+
+class _FakeHttp:
+    """Minimal stand-in for aiohttp.ClientSession — supports `.get(url)`
+    as a sync method returning an async context manager. Each url maps
+    to either a (status, body) response or an exception class to raise
+    on enter."""
+
+    def __init__(self, responses: dict[str, _FakeResponse] | None = None,
+                 errors: dict[str, BaseException] | None = None):
+        self.responses = responses or {}
+        self.errors = errors or {}
+
+    def get(self, url):
+        if url in self.errors:
+            return _FakeGetCM(exc=self.errors[url])
+        return _FakeGetCM(
+            response=self.responses.get(url, _FakeResponse(404))
+        )
+
+
+@pytest.mark.asyncio
+async def test_download_pending_saves_file_and_updates_row(
+    fresh_db, tmp_path, monkeypatch
+):
+    from core import archive
+    monkeypatch.setattr(archive, "ATTACHMENTS_DIR", tmp_path)
+
+    await archive.record(
+        fresh_db, message_id=50, channel_id=1, guild_id=1, author_id=1,
+        content=None, created_at=0,
+        attachments=[archive.AttachmentSpec("f.txt", "https://x/f", None, 100)],
+    )
+
+    http = _FakeHttp(responses={"https://x/f": _FakeResponse(200, b"hello")})
+    await archive.download_pending(fresh_db, http, 50)
+
+    saved = tmp_path / "50" / "f.txt"
+    assert saved.read_bytes() == b"hello"
+
+    async with fresh_db.execute(
+        "SELECT local_path, skipped_reason FROM attachments "
+        "WHERE message_id = ?",
+        (50,),
+    ) as cur:
+        row = await cur.fetchone()
+    assert row[0] == str(saved)
+    assert row[1] is None
+
+
+@pytest.mark.asyncio
+async def test_download_pending_marks_oversized_skipped(
+    fresh_db, tmp_path, monkeypatch
+):
+    from core import archive
+    monkeypatch.setattr(archive, "ATTACHMENTS_DIR", tmp_path)
+
+    await archive.record(
+        fresh_db, message_id=51, channel_id=1, guild_id=1, author_id=1,
+        content=None, created_at=0,
+        attachments=[archive.AttachmentSpec(
+            "big.bin", "https://x/big", None, archive.MAX_ATTACHMENT_BYTES + 1
+        )],
+    )
+
+    http = _FakeHttp()  # never reached
+    await archive.download_pending(fresh_db, http, 51)
+
+    async with fresh_db.execute(
+        "SELECT local_path, skipped_reason FROM attachments "
+        "WHERE message_id = ?",
+        (51,),
+    ) as cur:
+        row = await cur.fetchone()
+    assert row[0] is None
+    assert row[1] == "too_large"
+    assert not (tmp_path / "51").exists()  # nothing written
+
+
+@pytest.mark.asyncio
+async def test_download_pending_marks_http_error_skipped(
+    fresh_db, tmp_path, monkeypatch
+):
+    from core import archive
+    monkeypatch.setattr(archive, "ATTACHMENTS_DIR", tmp_path)
+
+    await archive.record(
+        fresh_db, message_id=52, channel_id=1, guild_id=1, author_id=1,
+        content=None, created_at=0,
+        attachments=[archive.AttachmentSpec("f.txt", "https://x/f", None, 100)],
+    )
+
+    http = _FakeHttp(responses={"https://x/f": _FakeResponse(404)})
+    await archive.download_pending(fresh_db, http, 52)
+
+    async with fresh_db.execute(
+        "SELECT local_path, skipped_reason FROM attachments "
+        "WHERE message_id = ?",
+        (52,),
+    ) as cur:
+        row = await cur.fetchone()
+    assert row[0] is None
+    assert row[1] == "http_404"
+
+
+@pytest.mark.asyncio
+async def test_download_pending_marks_network_error_skipped(
+    fresh_db, tmp_path, monkeypatch
+):
+    from core import archive
+    monkeypatch.setattr(archive, "ATTACHMENTS_DIR", tmp_path)
+
+    await archive.record(
+        fresh_db, message_id=53, channel_id=1, guild_id=1, author_id=1,
+        content=None, created_at=0,
+        attachments=[archive.AttachmentSpec("f.txt", "https://x/f", None, 100)],
+    )
+
+    http = _FakeHttp(errors={"https://x/f": aiohttp.ClientError("boom")})
+    await archive.download_pending(fresh_db, http, 53)
+
+    async with fresh_db.execute(
+        "SELECT local_path, skipped_reason FROM attachments "
+        "WHERE message_id = ?",
+        (53,),
+    ) as cur:
+        row = await cur.fetchone()
+    assert row[0] is None
+    assert row[1] == "download_failed"
+
+
+@pytest.mark.asyncio
+async def test_download_pending_idempotent_on_already_saved(
+    fresh_db, tmp_path, monkeypatch
+):
+    """If a row already has local_path set, a second call must not
+    re-fetch it. Verify by giving the fake an empty responses map —
+    a re-fetch attempt would 404-skip the row, mutating skipped_reason."""
+    from core import archive
+    monkeypatch.setattr(archive, "ATTACHMENTS_DIR", tmp_path)
+
+    await archive.record(
+        fresh_db, message_id=54, channel_id=1, guild_id=1, author_id=1,
+        content=None, created_at=0,
+        attachments=[archive.AttachmentSpec("f.txt", "https://x/f", None, 100)],
+    )
+
+    http_ok = _FakeHttp(responses={"https://x/f": _FakeResponse(200, b"ok")})
+    await archive.download_pending(fresh_db, http_ok, 54)
+
+    http_empty = _FakeHttp()
+    await archive.download_pending(fresh_db, http_empty, 54)
+
+    async with fresh_db.execute(
+        "SELECT local_path, skipped_reason FROM attachments "
+        "WHERE message_id = ?",
+        (54,),
+    ) as cur:
+        row = await cur.fetchone()
+    assert row[0] is not None  # still saved
+    assert row[1] is None  # still not skipped
+
+
+@pytest.mark.asyncio
+async def test_download_pending_restrict_to_db_ids(
+    fresh_db, tmp_path, monkeypatch
+):
+    """Only the listed attachment IDs should be touched; the others
+    stay pending so a later delete-event picks them up."""
+    from core import archive
+    monkeypatch.setattr(archive, "ATTACHMENTS_DIR", tmp_path)
+
+    await archive.record(
+        fresh_db, message_id=55, channel_id=1, guild_id=1, author_id=1,
+        content=None, created_at=0,
+        attachments=[
+            archive.AttachmentSpec("a.txt", "https://x/a", None, 10),
+            archive.AttachmentSpec("b.txt", "https://x/b", None, 10),
+        ],
+    )
+    all_atts = await archive.get_attachments(fresh_db, 55)
+    a_id = next(a.id for a in all_atts if a.filename == "a.txt")
+
+    http = _FakeHttp(responses={
+        "https://x/a": _FakeResponse(200, b"A"),
+        "https://x/b": _FakeResponse(200, b"B"),
+    })
+    await archive.download_pending(fresh_db, http, 55, restrict_to_db_ids={a_id})
+
+    after = {a.filename: a for a in await archive.get_attachments(fresh_db, 55)}
+    assert after["a.txt"].local_path is not None
+    assert after["b.txt"].local_path is None
+    assert after["b.txt"].skipped_reason is None

@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import NamedTuple
 
+import aiohttp
 import aiosqlite
 
 log = logging.getLogger(__name__)
@@ -241,3 +242,66 @@ async def pending_attachments(
     async with db.execute(sql, params) as cur:
         rows = await cur.fetchall()
     return [PendingAttachment(*row) for row in rows]
+
+
+async def download_pending(
+    db: aiosqlite.Connection,
+    http: aiohttp.ClientSession,
+    message_id: int,
+    *,
+    restrict_to_db_ids: set[int] | None = None,
+) -> None:
+    """Download any pending attachments for `message_id` to
+    `data/attachments/<message_id>/<filename>`. Idempotent — only rows
+    with `local_path IS NULL AND skipped_reason IS NULL` are touched,
+    so calling this from both the edit and delete handlers is safe and
+    won't re-fetch the same file twice.
+
+    Files larger than `MAX_ATTACHMENT_BYTES` are marked
+    `skipped_reason='too_large'` without being fetched. HTTP non-200
+    becomes `skipped_reason='http_<status>'`. Network and disk errors
+    become `skipped_reason='download_failed'`.
+
+    `restrict_to_db_ids` lets callers limit the work to a specific
+    subset of attachment row IDs — used by the edit handler to grab
+    just the removed-from-message attachments without prematurely
+    fetching the still-live ones."""
+    pending = await pending_attachments(
+        db, message_id, restrict_to_db_ids=restrict_to_db_ids
+    )
+    for att in pending:
+        if att.size is not None and att.size > MAX_ATTACHMENT_BYTES:
+            await db.execute(
+                "UPDATE attachments SET skipped_reason = ? WHERE id = ?",
+                ("too_large", att.id),
+            )
+            continue
+
+        target_dir = ATTACHMENTS_DIR / str(message_id)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target_path = target_dir / att.filename
+
+        try:
+            async with http.get(att.url) as resp:
+                if resp.status != 200:
+                    await db.execute(
+                        "UPDATE attachments SET skipped_reason = ? "
+                        "WHERE id = ?",
+                        (f"http_{resp.status}", att.id),
+                    )
+                    continue
+                with open(target_path, "wb") as f:
+                    async for chunk in resp.content.iter_chunked(64 * 1024):
+                        f.write(chunk)
+            await db.execute(
+                "UPDATE attachments SET local_path = ? WHERE id = ?",
+                (str(target_path), att.id),
+            )
+        except (aiohttp.ClientError, OSError):
+            log.exception("Attachment download failed for %s", att.url)
+            await db.execute(
+                "UPDATE attachments SET skipped_reason = ? WHERE id = ?",
+                ("download_failed", att.id),
+            )
+
+    await db.commit()
