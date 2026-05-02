@@ -13,7 +13,7 @@ The persistent record of all registered Birthdays — the `birthdays` table inte
 _Avoid_: "BirthdayStore", "BirthdayRegistry" — we use "calendar" because it's indexed by date and answers "who has a Birthday on day X?".
 
 **Archive**:
-The bot's persistent record of every message it sees in non-excluded channels. Includes the original content, every edit, and a deletion timestamp once the message is deleted. Storage is bounded — entries are evicted 90 days after the message's creation timestamp.
+The bot's persistent record of every message it sees in non-excluded channels — the `messages` / `message_edits` / `attachments` table interface and the on-disk attachment vault under `data/attachments/` (`core/archive.py`). Includes the original content, every edit, and a deletion timestamp once the message is deleted. Storage is bounded — entries are evicted 90 days after the message's creation timestamp.
 _Avoid_: "log", "history" (overloaded).
 
 **Mod-log**:
