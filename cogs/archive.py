@@ -70,7 +70,7 @@ class ArchiveCog(commands.Cog):
         return True
 
     @staticmethod
-    def _attachment_summary(rows: list[archive.Attachment]) -> str | None:
+    def _attachment_summary(rows: "list[archive.Attachment]") -> str | None:
         """Format the bullet list used in deletion / removal mod-log
         embeds from a list of Attachment rows already fetched by the
         caller."""
