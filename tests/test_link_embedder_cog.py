@@ -410,3 +410,90 @@ async def test_build_preview_embeds_keeps_real_page_with_challenge_word(
         "real page with description/image should render even if title "
         "happens to share words with a challenge page"
     )
+
+
+# --- _build_preview_embeds: Threads avatar fallback → thumbnail -------
+
+
+@pytest.mark.asyncio
+async def test_build_preview_embeds_threads_avatar_fallback_uses_thumbnail(
+    fresh_db, monkeypatch
+):
+    """A Threads post with no media: the page's og:image is the poster's
+    avatar, and Threads signals this by setting twitter:card='summary'
+    (vs 'summary_large_image' when real media is present). The avatar
+    must render as a thumbnail inset, not as the full-width hero —
+    otherwise a tiny portrait dominates an otherwise text-only embed."""
+    from cogs.link_embedder import LinkEmbedderCog
+
+    cog = LinkEmbedderCog(__import__("types").SimpleNamespace(db=fresh_db))
+    cog._http = object()
+    monkeypatch.setattr("cogs.link_embedder.PREVIEW_SERVICE_URL", "http://x")
+
+    avatar_meta = {
+        "platform": "threads",
+        "url": "https://www.threads.com/@u/post/DX0y9JlFc95",
+        "title": "Janet Kuo (@janetkuo) on Threads",
+        "description": "想大聲宣佈，今天正式升 L7 Senior Staff SWE",
+        "image": "https://example/avatar.jpg",
+        "video": None,
+        "siteName": "Threads",
+        "twitterCard": "summary",
+        "imageStp": "dst-jpg_s640x640_tt6",
+    }
+    monkeypatch.setattr(
+        cog, "_fetch_preview", AsyncMock(return_value=avatar_meta)
+    )
+
+    embeds = await cog._build_preview_embeds(
+        ["https://www.threads.com/@u/post/DX0y9JlFc95"]
+    )
+    assert len(embeds) == 1
+    embed = embeds[0]
+    assert embed.thumbnail.url == "https://example/avatar.jpg", (
+        "avatar fallback should be routed to set_thumbnail"
+    )
+    assert embed.image.url is None, (
+        "avatar fallback should NOT be routed to set_image"
+    )
+    assert embed.footer.text is None, (
+        "no video footer expected on a no-media post"
+    )
+
+
+@pytest.mark.asyncio
+async def test_build_preview_embeds_threads_image_post_keeps_main_image(
+    fresh_db, monkeypatch
+):
+    """Regression guard for Task 2: a normal Threads post with media must
+    still use set_image (full-width hero), not set_thumbnail. Threads
+    signals real media via twitter:card='summary_large_image'."""
+    from cogs.link_embedder import LinkEmbedderCog
+
+    cog = LinkEmbedderCog(__import__("types").SimpleNamespace(db=fresh_db))
+    cog._http = object()
+    monkeypatch.setattr("cogs.link_embedder.PREVIEW_SERVICE_URL", "http://x")
+
+    image_meta = {
+        "platform": "threads",
+        "url": "https://www.threads.com/@u/post/DX1vJ40E0Eg",
+        "title": "Illustrator on Threads",
+        "description": "Cute illustration",
+        "image": "https://example/post-media.jpg",
+        "video": None,
+        "siteName": "Threads",
+        "twitterCard": "summary_large_image",
+        "imageStp": "cp6_dst-jpg_e35_tt6",
+    }
+    monkeypatch.setattr(
+        cog, "_fetch_preview", AsyncMock(return_value=image_meta)
+    )
+
+    embeds = await cog._build_preview_embeds(
+        ["https://www.threads.com/@u/post/DX1vJ40E0Eg"]
+    )
+    assert len(embeds) == 1
+    embed = embeds[0]
+    assert embed.image.url == "https://example/post-media.jpg"
+    assert embed.thumbnail.url is None
+    assert embed.footer.text is None

@@ -202,6 +202,18 @@ def _truncate_for_embed(s: str | None, limit: int) -> str | None:
     return s[: limit - 1].rstrip() + "…"
 
 
+def _is_threads_avatar_fallback(meta: dict[str, Any]) -> bool:
+    """Threads serves twitter:card='summary' (small-thumbnail card) when
+    the post has no media — og:image then resolves to the poster's
+    avatar. With real media (image or video frame), Threads emits
+    'summary_large_image'. Detected here so the avatar renders as a
+    thumbnail inset rather than the embed's full-width hero."""
+    return (
+        meta.get("platform") == "threads"
+        and meta.get("twitterCard") == "summary"
+    )
+
+
 def _is_instagram_reel(url: str) -> bool:
     """Instagram reel `og:image`s have a play-button glyph baked in, but
     the embed is a static image — we add a footer hint for reels so users
@@ -300,7 +312,10 @@ class LinkEmbedderCog(commands.Cog):
             if meta.get("siteName"):
                 embed.set_author(name=meta["siteName"])
             if meta.get("image"):
-                embed.set_image(url=meta["image"])
+                if _is_threads_avatar_fallback(meta):
+                    embed.set_thumbnail(url=meta["image"])
+                else:
+                    embed.set_image(url=meta["image"])
             if _is_instagram_reel(url):
                 embed.set_footer(text="Reel · cannot be played here")
             embeds.append(embed)
