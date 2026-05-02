@@ -8,6 +8,32 @@ A personal Discord bot the owner is writing for their own server. **Features wil
 
 For an at-a-glance overview see `README.md`; for operator setup see `docs/USAGE.md`; for end-user / mod command reference see `docs/FEATURES.md`. For domain language (Archive, Mod-log, Moderator vs. Admin, etc.), see `docs/CONTEXT.md`. For load-bearing technical decisions, see `docs/adr/`.
 
+## Workflow
+
+For substantial work — new cogs, deepening refactors, anything touching multiple files or worth a plan — use the superpowers workflow rather than ad-hoc edits. This is the pattern the recent Birthday calendar / Archive / Webhook reposts module extractions used. Invoke skills via the `Skill` tool (do not `Read` the SKILL.md files).
+
+**Skills, in the order you typically reach for them:**
+- `superpowers:brainstorming` — for net-new features, before any plan exists.
+- `superpowers:improve-codebase-architecture` — for refactors. Surfaces deepening candidates (shallow modules → deep ones), grills the chosen one, then hands off to `writing-plans`.
+- `superpowers:writing-plans` — turns an agreed design into a numbered task plan. Plans go in `docs/superpowers/plans/YYYY-MM-DD-<name>.md`.
+- `superpowers:using-git-worktrees` — REQUIRED before implementing a plan. The project uses `.worktrees/` (already gitignored).
+- `superpowers:subagent-driven-development` — executes the plan task-by-task: per task, dispatch implementer subagent → spec-compliance reviewer → code-quality reviewer; loop until both approve, then move on. One commit per task. Final review of the whole branch at the end.
+- `superpowers:finishing-a-development-branch` — fast-forward merge to `main`, delete the branch, remove the worktree.
+
+**End-to-end pattern:**
+1. Brainstorm (new feature) or `improve-codebase-architecture` (refactor) → user picks the candidate.
+2. `writing-plans` produces a plan; user approves.
+3. `using-git-worktrees` creates `.worktrees/<branch>`.
+4. `subagent-driven-development` runs each task to completion before moving to the next.
+5. `finishing-a-development-branch` merges to `main` and cleans up.
+6. **Wait for the user to explicitly say "ship it"** before running `scripts/deploy.sh`. Merging is not deploying.
+
+**Subagent prompts MUST pin the working directory.** Every `Bash` command in implementer/reviewer prompts — especially every `git` command — has to start with `cd /Users/illumeow/Developer/discord-bot/.worktrees/<branch> &&`. Without this, fast/cheap models occasionally commit to `main` from the parent CWD even when file paths were absolute. Recovery is cherry-pick + reset of `main`; the prompt-level guard prevents the mistake in the first place.
+
+**One feature/task per commit.** Don't pile several tasks into one commit. (See also `feedback_commit_per_feature.md` in auto-memory.)
+
+**When the workflow is overkill:** typo fixes, single-line tweaks, env-var renames, doc-only edits, one-cog one-line bug fixes. Just edit and commit. The Project-intent rule still holds — don't extract a `core/` module on the first appearance of a pattern; wait for the second or third.
+
 ## Environment
 
 - Python **3.14** (CPython, aarch64 macOS), pinned in `.venv/pyvenv.cfg`.
