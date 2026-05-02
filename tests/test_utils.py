@@ -88,3 +88,43 @@ def test_parse_bool_env_other_values_are_true():
 def test_parse_bool_env_strips_whitespace():
     assert parse_bool_env("  false  ", default=True) is False
     assert parse_bool_env("\ttrue\n", default=False) is True
+
+
+# --- is_channel_or_parent_in ----------------------------------------------
+
+from unittest.mock import MagicMock
+
+import discord
+
+
+def test_is_channel_or_parent_in_direct_match():
+    from core.utils import is_channel_or_parent_in
+    bot = MagicMock()
+    bot.get_channel.return_value = None
+    assert is_channel_or_parent_in(bot, 100, {100, 200}) is True
+
+
+def test_is_channel_or_parent_in_thread_parent_match():
+    from core.utils import is_channel_or_parent_in
+    thread = MagicMock(spec=discord.Thread)
+    thread.parent_id = 100
+    bot = MagicMock()
+    bot.get_channel.return_value = thread
+    assert is_channel_or_parent_in(bot, 999, {100}) is True
+
+
+def test_is_channel_or_parent_in_no_match():
+    from core.utils import is_channel_or_parent_in
+    bot = MagicMock()
+    bot.get_channel.return_value = None
+    assert is_channel_or_parent_in(bot, 999, {100, 200}) is False
+
+
+def test_is_channel_or_parent_in_non_thread_channel():
+    """A regular TextChannel object isn't a Thread; the parent walk
+    must not fire even if get_channel returns something."""
+    from core.utils import is_channel_or_parent_in
+    chan = MagicMock(spec=discord.TextChannel)
+    bot = MagicMock()
+    bot.get_channel.return_value = chan
+    assert is_channel_or_parent_in(bot, 999, {100}) is False

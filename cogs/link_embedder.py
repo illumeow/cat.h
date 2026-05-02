@@ -12,7 +12,7 @@ import discord
 from discord.ext import commands
 
 from core import mod_log
-from core.utils import parse_id_set
+from core.utils import is_channel_or_parent_in, parse_id_set
 
 if TYPE_CHECKING:
     from bot import Bot
@@ -227,21 +227,6 @@ class LinkEmbedderCog(commands.Cog):
 
     # --- helpers -----------------------------------------------------------
 
-    def _channel_or_parent_excluded(self, channel_id: int) -> bool:
-        """Exclusion check that respects the parent-of-Discord-thread rule.
-        Listing a parent channel ID in LINK_EMBEDDER_EXCLUDED_CHANNELS
-        implicitly excludes all of its threads via the in-memory channel
-        cache."""
-        if channel_id in EXCLUDED_CHANNELS:
-            return True
-        chan = self.bot.get_channel(channel_id)
-        if (
-            isinstance(chan, discord.Thread)
-            and chan.parent_id in EXCLUDED_CHANNELS
-        ):
-            return True
-        return False
-
     async def _fetch_preview(self, url: str) -> dict[str, Any] | None:
         """Ask the preview sidecar for OG metadata about `url`. Returns the
         decoded JSON dict on success, None on any failure (timeout, HTTP
@@ -380,7 +365,7 @@ class LinkEmbedderCog(commands.Cog):
             return
         if "content" not in payload.data:
             return
-        if self._channel_or_parent_excluded(payload.channel_id):
+        if is_channel_or_parent_in(self.bot, payload.channel_id, EXCLUDED_CHANNELS):
             return
         new_content = payload.data["content"]
         if not new_content:
@@ -419,7 +404,7 @@ class LinkEmbedderCog(commands.Cog):
         # helper resolves Discord threads back to their parent so listing a
         # parent channel ID in LINK_EMBEDDER_EXCLUDED_CHANNELS implicitly
         # excludes all of its threads.
-        if self._channel_or_parent_excluded(message.channel.id):
+        if is_channel_or_parent_in(self.bot, message.channel.id, EXCLUDED_CHANNELS):
             return
 
         # Resolve the webhook-bearing parent channel and (optionally) the

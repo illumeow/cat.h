@@ -13,7 +13,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from core import mod_log
-from core.utils import parse_id_set
+from core.utils import is_channel_or_parent_in, parse_id_set
 
 if TYPE_CHECKING:
     from bot import Bot
@@ -60,17 +60,6 @@ class ArchiveCog(commands.Cog):
             await self._http.close()
 
     # --- helpers -----------------------------------------------------------
-
-    def _channel_or_parent_excluded(self, channel_id: int) -> bool:
-        """Exclusion check that respects the parent-of-Discord-thread rule.
-        Used by the raw edit/delete listeners which only receive the channel
-        ID; the in-memory channel cache resolves the parent for us."""
-        if channel_id in EXCLUDED_CHANNELS:
-            return True
-        chan = self.bot.get_channel(channel_id)
-        if isinstance(chan, discord.Thread) and chan.parent_id in EXCLUDED_CHANNELS:
-            return True
-        return False
 
     def _should_log(self, message: discord.Message) -> bool:
         # Caller is expected to have filtered DMs (message.guild is None).
@@ -128,7 +117,7 @@ class ArchiveCog(commands.Cog):
         # EXCLUDED_CHANNELS automatically, so this short-circuits all edits
         # in mod-log too. The helper also matches a Discord thread whose
         # parent channel was added to the exclusion list after archive time.
-        if self._channel_or_parent_excluded(payload.channel_id):
+        if is_channel_or_parent_in(self.bot, payload.channel_id, EXCLUDED_CHANNELS):
             return
         # Discord's MESSAGE_UPDATE is partial: only changed fields are
         # delivered. Skip events that touch neither content nor attachments
@@ -241,7 +230,7 @@ class ArchiveCog(commands.Cog):
         # Channel-level exclusion before any DB or disk work. Helper also
         # catches Discord-thread parents added to the exclusion list after
         # the message was archived.
-        if self._channel_or_parent_excluded(payload.channel_id):
+        if is_channel_or_parent_in(self.bot, payload.channel_id, EXCLUDED_CHANNELS):
             return
 
         if suppress_mod_log:
