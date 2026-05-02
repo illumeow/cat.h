@@ -11,7 +11,7 @@ import aiohttp
 import discord
 from discord.ext import commands
 
-from core import mod_log
+from core import archive, mod_log, webhook_reposts
 from core.utils import is_channel_or_parent_in, parse_id_set
 
 if TYPE_CHECKING:
@@ -478,21 +478,15 @@ class LinkEmbedderCog(commands.Cog):
         # so a later ❌ can show an /archive-show-able ID in the mod-log
         # "Deleted" notice (the webhook repost itself isn't archived;
         # the original is).
-        await self.bot.db.execute(
-            "INSERT INTO webhook_reposts "
-            "(webhook_message_id, channel_id, original_author_id, "
-            "cleaned_content, posted_at, original_message_id) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (
-                sent.id,
-                message.channel.id,
-                message.author.id,
-                new_content,
-                int(time_mod.time()),
-                message.id,
-            ),
+        await webhook_reposts.record(
+            self.bot.db,
+            webhook_message_id=sent.id,
+            channel_id=message.channel.id,
+            original_author_id=message.author.id,
+            cleaned_content=new_content,
+            posted_at=int(time_mod.time()),
+            original_message_id=message.id,
         )
-        await self.bot.db.commit()
 
         # Mark the original delete as bot-initiated so the archive cog
         # skips the mod-log notice. Then attempt the delete; on Forbidden
@@ -567,13 +561,7 @@ class LinkEmbedderCog(commands.Cog):
     # --- helpers: webhook repost teardown ---------------------------------
 
     async def _finalize_repost(
-        self,
-        *,
-        webhook_message_id: int,
-        channel_id: int,
-        original_author_id: int,
-        cleaned_content: str | None,
-        original_message_id: int | None,
+        self, repost: webhook_reposts.WebhookRepost
     ) -> None:
         """Run when a tracked webhook repost is going away (❌ press, manual
         delete by an admin, original poster removing it themselves, etc.).
@@ -581,22 +569,19 @@ class LinkEmbedderCog(commands.Cog):
         user's original at this moment (the archive cog deferred it for
         exactly this), and posts a mod-log "Deleted" notice.
 
-        Idempotent on the deleted_at update via the `deleted_at IS NULL`
-        guard. The webhook_reposts DELETE acts as the single point of
-        coordination between the ❌ path and the on_raw_message_delete
-        listener — whichever fires first removes the row, and the other's
-        lookup will see no row and no-op."""
-        await self.bot.db.execute(
-            "DELETE FROM webhook_reposts WHERE webhook_message_id = ?",
-            (webhook_message_id,),
-        )
-        if original_message_id is not None:
-            await self.bot.db.execute(
-                "UPDATE messages SET deleted_at = ? "
-                "WHERE id = ? AND deleted_at IS NULL",
-                (int(time_mod.time()), original_message_id),
+        Idempotent on the deleted_at stamp via `archive.mark_deleted`'s
+        atomic `WHERE deleted_at IS NULL` guard. The webhook_reposts
+        delete acts as the single point of coordination between the ❌
+        path and the on_raw_message_delete listener — whichever fires
+        first removes the row, and the other's lookup will see no row
+        and no-op."""
+        await webhook_reposts.delete(self.bot.db, repost.webhook_message_id)
+        if repost.original_message_id is not None:
+            await archive.mark_deleted(
+                self.bot.db,
+                message_id=repost.original_message_id,
+                deleted_at=int(time_mod.time()),
             )
-        await self.bot.db.commit()
 
         # Surface the user's *original* message ID in the mod-log Deleted
         # embed (the webhook repost itself isn't archived, but the original
@@ -607,10 +592,10 @@ class LinkEmbedderCog(commands.Cog):
         await mod_log.post_deleted(
             self.bot,
             MOD_LOG_CHANNEL_ID,
-            message_id=original_message_id or webhook_message_id,
-            author_id=original_author_id,
-            source_channel_id=channel_id,
-            content=cleaned_content,
+            message_id=repost.original_message_id or repost.webhook_message_id,
+            author_id=repost.original_author_id,
+            source_channel_id=repost.channel_id,
+            content=repost.cleaned_content,
         )
 
     # --- listener: ✅ / ❌ reactions ---------------------------------------
@@ -627,21 +612,14 @@ class LinkEmbedderCog(commands.Cog):
         if emoji not in (CONFIRM_EMOJI, DELETE_EMOJI):
             return
 
-        async with self.bot.db.execute(
-            "SELECT channel_id, original_author_id, cleaned_content, "
-            "original_message_id "
-            "FROM webhook_reposts WHERE webhook_message_id = ?",
-            (payload.message_id,),
-        ) as cur:
-            row = await cur.fetchone()
-        if row is None:
+        repost = await webhook_reposts.get(self.bot.db, payload.message_id)
+        if repost is None:
             return
-        channel_id, original_author_id, cleaned_content, original_message_id = row
 
-        if payload.user_id != original_author_id:
+        if payload.user_id != repost.original_author_id:
             return  # only the original poster's reactions count
 
-        channel = self.bot.get_channel(channel_id)
+        channel = self.bot.get_channel(repost.channel_id)
         if not isinstance(channel, discord.abc.Messageable):
             return  # channel gone, uncached, or not a messageable type anymore
 
@@ -649,11 +627,7 @@ class LinkEmbedderCog(commands.Cog):
             message = await channel.fetch_message(payload.message_id)
         except discord.HTTPException:
             # Message gone already; just clean up the row.
-            await self.bot.db.execute(
-                "DELETE FROM webhook_reposts WHERE webhook_message_id = ?",
-                (payload.message_id,),
-            )
-            await self.bot.db.commit()
+            await webhook_reposts.delete(self.bot.db, payload.message_id)
             return
 
         if emoji == CONFIRM_EMOJI:
@@ -661,24 +635,14 @@ class LinkEmbedderCog(commands.Cog):
                 await message.clear_reactions()
             except discord.HTTPException:
                 log.exception("Failed to clear reactions on %s", payload.message_id)
-            await self.bot.db.execute(
-                "DELETE FROM webhook_reposts WHERE webhook_message_id = ?",
-                (payload.message_id,),
-            )
-            await self.bot.db.commit()
+            await webhook_reposts.delete(self.bot.db, payload.message_id)
             return
 
         # DELETE_EMOJI: finalize *before* deleting so the resulting
         # MESSAGE_DELETE event finds no webhook_reposts row and the
         # on_raw_message_delete listener no-ops (otherwise we'd post the
         # mod-log notice twice).
-        await self._finalize_repost(
-            webhook_message_id=payload.message_id,
-            channel_id=channel_id,
-            original_author_id=original_author_id,
-            cleaned_content=cleaned_content,
-            original_message_id=original_message_id,
-        )
+        await self._finalize_repost(repost)
         try:
             await message.delete()
         except discord.HTTPException:
@@ -696,23 +660,10 @@ class LinkEmbedderCog(commands.Cog):
         flow as ❌. The ❌ path runs `_finalize_repost` *before* it calls
         `message.delete()`, so when the resulting MESSAGE_DELETE arrives
         here the row is already gone and we no-op."""
-        async with self.bot.db.execute(
-            "SELECT channel_id, original_author_id, cleaned_content, "
-            "original_message_id "
-            "FROM webhook_reposts WHERE webhook_message_id = ?",
-            (payload.message_id,),
-        ) as cur:
-            row = await cur.fetchone()
-        if row is None:
+        repost = await webhook_reposts.get(self.bot.db, payload.message_id)
+        if repost is None:
             return
-        channel_id, original_author_id, cleaned_content, original_message_id = row
-        await self._finalize_repost(
-            webhook_message_id=payload.message_id,
-            channel_id=channel_id,
-            original_author_id=original_author_id,
-            cleaned_content=cleaned_content,
-            original_message_id=original_message_id,
-        )
+        await self._finalize_repost(repost)
 
 
 async def setup(bot: "Bot") -> None:

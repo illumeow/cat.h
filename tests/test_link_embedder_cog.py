@@ -201,12 +201,17 @@ async def test_finalize_repost_stamps_deleted_at_on_original(
         "cogs.link_embedder.mod_log.post_deleted", AsyncMock()
     )
 
+    from core.webhook_reposts import WebhookRepost
+
     await cog._finalize_repost(
-        webhook_message_id=5000,
-        channel_id=200,
-        original_author_id=5,
-        cleaned_content="cleaned",
-        original_message_id=42,
+        WebhookRepost(
+            webhook_message_id=5000,
+            channel_id=200,
+            original_author_id=5,
+            cleaned_content="cleaned",
+            posted_at=0,
+            original_message_id=42,
+        )
     )
 
     async with bot.db.execute(
