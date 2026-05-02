@@ -26,7 +26,7 @@ For substantial work — new cogs, deepening refactors, anything touching multip
 3. `using-git-worktrees` creates `.worktrees/<branch>`.
 4. `subagent-driven-development` runs each task to completion before moving to the next.
 5. `finishing-a-development-branch` merges to `main` and cleans up.
-6. **Wait for the user to explicitly say "ship it"** before running `scripts/deploy.sh`. Merging is not deploying.
+6. **Wait for the user to explicitly say "ship it"** before running `scripts/deploy.sh`. Merging is not deploying. The deploy script already runs `git push` itself, so don't push to `origin/main` separately — once `main` is fast-forwarded locally, the next step is just to ask the user to deploy (or wait for them to do it).
 
 **Subagent prompts MUST pin the working directory.** Every `Bash` command in implementer/reviewer prompts — especially every `git` command — has to start with `cd /Users/illumeow/Developer/discord-bot/.worktrees/<branch> &&`. Without this, fast/cheap models occasionally commit to `main` from the parent CWD even when file paths were absolute. Recovery is cherry-pick + reset of `main`; the prompt-level guard prevents the mistake in the first place.
 
