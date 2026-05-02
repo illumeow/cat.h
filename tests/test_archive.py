@@ -607,3 +607,97 @@ async def test_download_pending_restrict_to_db_ids(
     assert after["a.txt"].local_path is not None
     assert after["b.txt"].local_path is None
     assert after["b.txt"].skipped_reason is None
+
+
+@pytest.mark.asyncio
+async def test_purge_expired_deletes_old_messages_and_dirs(
+    fresh_db, tmp_path, monkeypatch
+):
+    from core import archive
+    monkeypatch.setattr(archive, "ATTACHMENTS_DIR", tmp_path)
+
+    # Old: well past the cutoff (epoch).
+    await archive.record(
+        fresh_db, message_id=70, channel_id=1, guild_id=1, author_id=1,
+        content="old", created_at=0, attachments=[],
+    )
+    # Fresh: created right now.
+    fresh_ts = int(time.time())
+    await archive.record(
+        fresh_db, message_id=71, channel_id=1, guild_id=1, author_id=1,
+        content="fresh", created_at=fresh_ts, attachments=[],
+    )
+
+    # Drop a fake attachment dir for the old message — the purge
+    # should rmtree it.
+    old_dir = tmp_path / "70"
+    old_dir.mkdir()
+    (old_dir / "ghost.bin").write_bytes(b"x")
+
+    purged = await archive.purge_expired(fresh_db)
+    assert purged == 1
+
+    assert await archive.get(fresh_db, 70) is None
+    assert await archive.get(fresh_db, 71) is not None
+    assert not old_dir.exists()
+
+
+@pytest.mark.asyncio
+async def test_purge_expired_cascades_edits_and_attachments(
+    fresh_db, tmp_path, monkeypatch
+):
+    """Schema declares `ON DELETE CASCADE` for message_edits and
+    attachments. Purging the parent row must take its children too."""
+    from core import archive
+    monkeypatch.setattr(archive, "ATTACHMENTS_DIR", tmp_path)
+
+    await archive.record(
+        fresh_db, message_id=72, channel_id=1, guild_id=1, author_id=1,
+        content="v1", created_at=0,
+        attachments=[archive.AttachmentSpec("a.txt", "https://x/a", None, 10)],
+    )
+    await archive.record_edit(
+        fresh_db, message_id=72, prior_content="v1",
+        new_content="v2", edited_at=100,
+    )
+
+    await archive.purge_expired(fresh_db)
+
+    async with fresh_db.execute(
+        "SELECT COUNT(*) FROM message_edits WHERE message_id = 72"
+    ) as cur:
+        (n_edits,) = await cur.fetchone()
+    async with fresh_db.execute(
+        "SELECT COUNT(*) FROM attachments WHERE message_id = 72"
+    ) as cur:
+        (n_atts,) = await cur.fetchone()
+    assert n_edits == 0
+    assert n_atts == 0
+
+
+@pytest.mark.asyncio
+async def test_purge_expired_leaves_webhook_reposts_alone(
+    fresh_db, tmp_path, monkeypatch
+):
+    """webhook_reposts is the link embedder's table; purge_expired
+    must not touch it. The cog's daily_purge owns that DELETE
+    inline."""
+    from core import archive
+    monkeypatch.setattr(archive, "ATTACHMENTS_DIR", tmp_path)
+
+    await fresh_db.execute(
+        "INSERT INTO webhook_reposts "
+        "(webhook_message_id, channel_id, original_author_id, "
+        "cleaned_content, posted_at, original_message_id) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (9001, 1, 1, "ancient", 0, 9000),
+    )
+    await fresh_db.commit()
+
+    await archive.purge_expired(fresh_db)
+
+    async with fresh_db.execute(
+        "SELECT COUNT(*) FROM webhook_reposts WHERE webhook_message_id = 9001"
+    ) as cur:
+        (n,) = await cur.fetchone()
+    assert n == 1

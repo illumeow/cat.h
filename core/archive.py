@@ -5,6 +5,7 @@ non-excluded channels, plus the on-disk attachment vault under
 window."""
 
 import logging
+import shutil
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import NamedTuple
@@ -305,3 +306,25 @@ async def download_pending(
             )
 
     await db.commit()
+
+
+async def purge_expired(db: aiosqlite.Connection) -> int:
+    """Delete messages older than `TTL_DAYS` plus their on-disk
+    attachment directories. Cascades `message_edits` and `attachments`
+    rows via FK ON DELETE CASCADE. Returns the count of message rows
+    purged. Does NOT touch `webhook_reposts` — that table is the link
+    embedder's, and the cog's daily_purge runs that DELETE inline."""
+    cutoff = cutoff_ts()
+    async with db.execute(
+        "SELECT id FROM messages WHERE created_at < ?", (cutoff,)
+    ) as cur:
+        ids = [row[0] for row in await cur.fetchall()]
+    await db.execute(
+        "DELETE FROM messages WHERE created_at < ?", (cutoff,)
+    )
+    await db.commit()
+    for mid in ids:
+        d = ATTACHMENTS_DIR / str(mid)
+        if d.exists():
+            shutil.rmtree(d, ignore_errors=True)
+    return len(ids)
