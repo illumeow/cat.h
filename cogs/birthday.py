@@ -1,4 +1,3 @@
-import calendar
 import logging
 import os
 from datetime import date, datetime, time
@@ -8,6 +7,8 @@ from zoneinfo import ZoneInfo
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
+
+from core import birthday_calendar
 
 if TYPE_CHECKING:
     from bot import Bot
@@ -51,12 +52,9 @@ class BirthdayCog(commands.Cog):
             )
             return
 
-        await self.bot.db.execute(
-            "INSERT OR REPLACE INTO birthdays (user_id, month, day) VALUES (?, ?, ?)",
-            (interaction.user.id, month, day),
+        await birthday_calendar.register(
+            self.bot.db, interaction.user.id, month, day
         )
-        await self.bot.db.commit()
-
         await interaction.response.send_message(
             f"Registered. I'll wish you happy birthday on {month:02d}/{day:02d}.",
             ephemeral=True,
@@ -76,7 +74,7 @@ class BirthdayCog(commands.Cog):
         # so interaction.user is always a Member here. Pylance can't see that.
         target = user or interaction.user
         if target.id != interaction.user.id:
-            perms = interaction.user.guild_permissions # type: ignore
+            perms = interaction.user.guild_permissions  # type: ignore
             if not (perms.administrator or perms.manage_guild):
                 await interaction.response.send_message(
                     "Only admins can remove someone else's birthday.",
@@ -84,11 +82,8 @@ class BirthdayCog(commands.Cog):
                 )
                 return
 
-        cursor = await self.bot.db.execute(
-            "DELETE FROM birthdays WHERE user_id = ?", (target.id,)
-        )
-        await self.bot.db.commit()
-        if cursor.rowcount == 0:
+        removed = await birthday_calendar.remove(self.bot.db, target.id)
+        if not removed:
             await interaction.response.send_message(
                 f"{target.display_name} has no birthday registered.",
                 ephemeral=True,
@@ -110,19 +105,15 @@ class BirthdayCog(commands.Cog):
         user: discord.Member | None = None,
     ) -> None:
         target = user or interaction.user
-        async with self.bot.db.execute(
-            "SELECT month, day FROM birthdays WHERE user_id = ?", (target.id,)
-        ) as cursor:
-            row = await cursor.fetchone()
-        if row is None:
+        bday = await birthday_calendar.get(self.bot.db, target.id)
+        if bday is None:
             await interaction.response.send_message(
                 f"{target.display_name} hasn't registered a birthday.",
                 ephemeral=True,
             )
             return
-        month, day = row
         await interaction.response.send_message(
-            f"{target.display_name}'s birthday: {month:02d}/{day:02d}.",
+            f"{target.display_name}'s birthday: {bday.month:02d}/{bday.day:02d}.",
             ephemeral=True,
         )
 
@@ -141,18 +132,7 @@ class BirthdayCog(commands.Cog):
                 BIRTHDAY_CHANNEL_ID,
             )
             return
-        feb29_falls_back = (
-            today.month == 2 and today.day == 28 and not calendar.isleap(today.year)
-        )
-        if feb29_falls_back:
-            sql = (
-                "SELECT user_id FROM birthdays "
-                "WHERE (month = ? AND day = ?) OR (month = 2 AND day = 29)"
-            )
-        else:
-            sql = "SELECT user_id FROM birthdays WHERE month = ? AND day = ?"
-        async with self.bot.db.execute(sql, (today.month, today.day)) as cursor:
-            user_ids = [row[0] for row in await cursor.fetchall()]
+        user_ids = await birthday_calendar.users_with_birthday_on(self.bot.db, today)
         for user_id in user_ids:
             await channel.send(f"Happy birthday, <@{user_id}>!")
 

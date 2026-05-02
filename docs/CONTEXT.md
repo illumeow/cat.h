@@ -8,6 +8,10 @@ A personal Discord bot for one server. Features are added one cog at a time. Thi
 A month/day pair registered by a Discord user; the bot announces it once per year in the configured birthday channel.
 _Avoid_: "DOB", "birth date" (no year is stored).
 
+**Birthday calendar**:
+The persistent record of all registered Birthdays — the `birthdays` table interface (`core/birthday_calendar.py`). Owns the leap-year rule that on a non-leap February 28, both Feb-28 and Feb-29 entries count as celebrating today.
+_Avoid_: "BirthdayStore", "BirthdayRegistry" — we use "calendar" because it's indexed by date and answers "who has a Birthday on day X?".
+
 **Archive**:
 The bot's persistent record of every message it sees in non-excluded channels. Includes the original content, every edit, and a deletion timestamp once the message is deleted. Storage is bounded — entries are evicted 90 days after the message's creation timestamp.
 _Avoid_: "log", "history" (overloaded).
