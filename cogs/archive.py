@@ -11,7 +11,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
-from core import archive, mod_log
+from core import archive, mod_log, webhook_reposts
 from core.utils import is_channel_or_parent_in, parse_id_set
 
 if TYPE_CHECKING:
@@ -269,20 +269,17 @@ class ArchiveCog(commands.Cog):
 
     @tasks.loop(time=PURGE_TIME)
     async def daily_purge(self) -> None:
-        purged = await archive.purge_expired(self.bot.db)
-        # Shared TTL window: webhook_reposts uses the same 90-day cap as
-        # the archive but it's the link embedder's table. We run the
-        # DELETE here because daily_purge already exists; revisit when
-        # the link embedder grows its own scheduled work.
-        await self.bot.db.execute(
-            "DELETE FROM webhook_reposts WHERE posted_at < ?",
-            (archive.cutoff_ts(),),
+        purged_msgs = await archive.purge_expired(self.bot.db)
+        # Shared TTL window: webhook_reposts borrows archive's 90-day
+        # cutoff. The cron lives here because archive's daily_purge
+        # already exists; the store module owns the SQL.
+        purged_reposts = await webhook_reposts.purge_expired(
+            self.bot.db, before_ts=archive.cutoff_ts()
         )
-        await self.bot.db.commit()
-
         log.info(
-            "Purged %d archived messages older than %d days",
-            purged,
+            "Purged %d archived messages and %d webhook reposts older than %d days",
+            purged_msgs,
+            purged_reposts,
             archive.TTL_DAYS,
         )
 
