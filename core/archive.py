@@ -102,3 +102,142 @@ async def mark_deleted(
     )
     await db.commit()
     return cursor.rowcount > 0
+
+
+class ArchivedMessage(NamedTuple):
+    id: int
+    channel_id: int
+    guild_id: int
+    author_id: int
+    content: str | None
+    created_at: int
+    edited_at: int | None
+    deleted_at: int | None
+
+
+class Edit(NamedTuple):
+    content: str | None
+    edited_at: int
+
+
+class Attachment(NamedTuple):
+    id: int
+    filename: str
+    url: str
+    content_type: str | None
+    size: int | None
+    local_path: str | None
+    skipped_reason: str | None
+
+
+class DeletedListing(NamedTuple):
+    id: int
+    channel_id: int
+    author_id: int
+    content: str | None
+    edited_at: int | None
+    deleted_at: int
+
+
+class PendingAttachment(NamedTuple):
+    id: int
+    filename: str
+    url: str
+    size: int | None
+
+
+async def get(
+    db: aiosqlite.Connection, message_id: int
+) -> ArchivedMessage | None:
+    async with db.execute(
+        "SELECT id, channel_id, guild_id, author_id, content, "
+        "created_at, edited_at, deleted_at FROM messages WHERE id = ?",
+        (message_id,),
+    ) as cur:
+        row = await cur.fetchone()
+    return None if row is None else ArchivedMessage(*row)
+
+
+async def get_edits(
+    db: aiosqlite.Connection, message_id: int
+) -> list[Edit]:
+    """Edit history for a message, newest first."""
+    async with db.execute(
+        "SELECT content, edited_at FROM message_edits "
+        "WHERE message_id = ? ORDER BY edited_at DESC",
+        (message_id,),
+    ) as cur:
+        rows = await cur.fetchall()
+    return [Edit(content=c, edited_at=e) for c, e in rows]
+
+
+async def get_attachments(
+    db: aiosqlite.Connection,
+    message_id: int,
+    *,
+    restrict_to_db_ids: set[int] | None = None,
+) -> list[Attachment]:
+    sql = (
+        "SELECT id, filename, url, content_type, size, local_path, "
+        "skipped_reason FROM attachments WHERE message_id = ?"
+    )
+    params: list[object] = [message_id]
+    if restrict_to_db_ids is not None:
+        if not restrict_to_db_ids:
+            return []
+        placeholders = ",".join(["?"] * len(restrict_to_db_ids))
+        sql += f" AND id IN ({placeholders})"
+        params.extend(restrict_to_db_ids)
+    async with db.execute(sql, params) as cur:
+        rows = await cur.fetchall()
+    return [Attachment(*row) for row in rows]
+
+
+async def list_deleted(
+    db: aiosqlite.Connection,
+    *,
+    user_id: int | None = None,
+    channel_id: int | None = None,
+    limit: int = 10,
+) -> list[DeletedListing]:
+    sql = (
+        "SELECT id, channel_id, author_id, content, edited_at, deleted_at "
+        "FROM messages WHERE deleted_at IS NOT NULL"
+    )
+    params: list[object] = []
+    if user_id is not None:
+        sql += " AND author_id = ?"
+        params.append(user_id)
+    if channel_id is not None:
+        sql += " AND channel_id = ?"
+        params.append(channel_id)
+    sql += " ORDER BY deleted_at DESC LIMIT ?"
+    params.append(limit)
+    async with db.execute(sql, params) as cur:
+        rows = await cur.fetchall()
+    return [DeletedListing(*row) for row in rows]
+
+
+async def pending_attachments(
+    db: aiosqlite.Connection,
+    message_id: int,
+    *,
+    restrict_to_db_ids: set[int] | None = None,
+) -> list[PendingAttachment]:
+    """Attachments not yet downloaded and not yet skipped — the rows
+    `download_pending` will act on."""
+    sql = (
+        "SELECT id, filename, url, size FROM attachments "
+        "WHERE message_id = ? "
+        "AND local_path IS NULL AND skipped_reason IS NULL"
+    )
+    params: list[object] = [message_id]
+    if restrict_to_db_ids is not None:
+        if not restrict_to_db_ids:
+            return []
+        placeholders = ",".join(["?"] * len(restrict_to_db_ids))
+        sql += f" AND id IN ({placeholders})"
+        params.extend(restrict_to_db_ids)
+    async with db.execute(sql, params) as cur:
+        rows = await cur.fetchall()
+    return [PendingAttachment(*row) for row in rows]

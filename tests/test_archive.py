@@ -193,3 +193,190 @@ def test_cutoff_ts_is_roughly_ttl_days_ago():
     expected = now - archive.TTL_DAYS * 86400
     # ±60s slack for the call straddling a clock tick.
     assert abs(cutoff - expected) < 60
+
+
+@pytest.mark.asyncio
+async def test_get_returns_archived_message(fresh_db):
+    from core import archive
+
+    await archive.record(
+        fresh_db,
+        message_id=10,
+        channel_id=11,
+        guild_id=111,
+        author_id=222,
+        content="hi",
+        created_at=500,
+        attachments=[],
+    )
+
+    msg = await archive.get(fresh_db, 10)
+    assert msg == archive.ArchivedMessage(
+        id=10,
+        channel_id=11,
+        guild_id=111,
+        author_id=222,
+        content="hi",
+        created_at=500,
+        edited_at=None,
+        deleted_at=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_returns_none_when_missing(fresh_db):
+    from core import archive
+
+    assert await archive.get(fresh_db, 99_999) is None
+
+
+@pytest.mark.asyncio
+async def test_get_edits_newest_first(fresh_db):
+    from core import archive
+
+    await archive.record(
+        fresh_db,
+        message_id=20,
+        channel_id=1,
+        guild_id=1,
+        author_id=1,
+        content="v1",
+        created_at=0,
+        attachments=[],
+    )
+    await archive.record_edit(
+        fresh_db, message_id=20, prior_content="v1", new_content="v2",
+        edited_at=100,
+    )
+    await archive.record_edit(
+        fresh_db, message_id=20, prior_content="v2", new_content="v3",
+        edited_at=200,
+    )
+
+    edits = await archive.get_edits(fresh_db, 20)
+    assert edits == [
+        archive.Edit(content="v2", edited_at=200),
+        archive.Edit(content="v1", edited_at=100),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_get_attachments_full_and_restricted(fresh_db):
+    from core import archive
+
+    await archive.record(
+        fresh_db,
+        message_id=30,
+        channel_id=1,
+        guild_id=1,
+        author_id=1,
+        content=None,
+        created_at=0,
+        attachments=[
+            archive.AttachmentSpec("a.png", "https://x/a", "image/png", 100),
+            archive.AttachmentSpec("b.png", "https://x/b", "image/png", 200),
+            archive.AttachmentSpec("c.png", "https://x/c", "image/png", 300),
+        ],
+    )
+
+    all_atts = await archive.get_attachments(fresh_db, 30)
+    assert [a.filename for a in all_atts] == ["a.png", "b.png", "c.png"]
+    a_id, b_id, _c_id = [a.id for a in all_atts]
+
+    only_ab = await archive.get_attachments(
+        fresh_db, 30, restrict_to_db_ids={a_id, b_id}
+    )
+    assert {a.filename for a in only_ab} == {"a.png", "b.png"}
+
+    empty = await archive.get_attachments(
+        fresh_db, 30, restrict_to_db_ids=set()
+    )
+    assert empty == []
+
+
+@pytest.mark.asyncio
+async def test_list_deleted_filters_and_limit(fresh_db):
+    """Each filter combination (user, channel, both, neither) plus
+    ordering by deleted_at DESC and the limit."""
+    from core import archive
+
+    rows = [
+        # (id, channel, author, deleted_at)
+        (1, 100, 10, 1000),
+        (2, 100, 11, 2000),
+        (3, 200, 10, 3000),
+        (4, 200, 11, 4000),
+        (5, 100, 10, 5000),
+    ]
+    for mid, ch, au, dt in rows:
+        await archive.record(
+            fresh_db, message_id=mid, channel_id=ch, guild_id=1,
+            author_id=au, content=f"m{mid}", created_at=0, attachments=[],
+        )
+        await archive.mark_deleted(
+            fresh_db, message_id=mid, deleted_at=dt
+        )
+    # Insert one undeleted row to confirm it never shows up.
+    await archive.record(
+        fresh_db, message_id=6, channel_id=100, guild_id=1,
+        author_id=10, content="alive", created_at=0, attachments=[],
+    )
+
+    no_filter = await archive.list_deleted(fresh_db, limit=10)
+    assert [r.id for r in no_filter] == [5, 4, 3, 2, 1]
+
+    user_only = await archive.list_deleted(fresh_db, user_id=10)
+    assert [r.id for r in user_only] == [5, 3, 1]
+
+    chan_only = await archive.list_deleted(fresh_db, channel_id=100)
+    assert [r.id for r in chan_only] == [5, 2, 1]
+
+    both = await archive.list_deleted(fresh_db, user_id=10, channel_id=100)
+    assert [r.id for r in both] == [5, 1]
+
+    capped = await archive.list_deleted(fresh_db, limit=2)
+    assert [r.id for r in capped] == [5, 4]
+
+
+@pytest.mark.asyncio
+async def test_pending_attachments_filters_saved_and_skipped(fresh_db):
+    """Only rows where local_path IS NULL AND skipped_reason IS NULL
+    are pending; rows updated to either state must drop out."""
+    from core import archive
+
+    await archive.record(
+        fresh_db, message_id=40, channel_id=1, guild_id=1, author_id=1,
+        content=None, created_at=0,
+        attachments=[
+            archive.AttachmentSpec("p.txt", "https://x/p", None, 10),
+            archive.AttachmentSpec("s.txt", "https://x/s", None, 10),
+            archive.AttachmentSpec("k.txt", "https://x/k", None, 10),
+        ],
+    )
+
+    await fresh_db.execute(
+        "UPDATE attachments SET local_path = ? WHERE filename = ?",
+        ("/tmp/saved", "s.txt"),
+    )
+    await fresh_db.execute(
+        "UPDATE attachments SET skipped_reason = ? WHERE filename = ?",
+        ("too_large", "k.txt"),
+    )
+    await fresh_db.commit()
+
+    pending = await archive.pending_attachments(fresh_db, 40)
+    assert [p.filename for p in pending] == ["p.txt"]
+
+
+@pytest.mark.asyncio
+async def test_pending_attachments_restrict_empty_short_circuits(fresh_db):
+    from core import archive
+
+    await archive.record(
+        fresh_db, message_id=41, channel_id=1, guild_id=1, author_id=1,
+        content=None, created_at=0,
+        attachments=[archive.AttachmentSpec("x.txt", "https://x/x", None, 10)],
+    )
+    assert await archive.pending_attachments(
+        fresh_db, 41, restrict_to_db_ids=set()
+    ) == []
