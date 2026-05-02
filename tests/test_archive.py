@@ -143,7 +143,7 @@ async def test_mark_deleted_first_call_returns_true(fresh_db):
         created_at=1000,
         attachments=[],
     )
-    assert await archive.mark_deleted(fresh_db, 5, 3000) is True
+    assert await archive.mark_deleted(fresh_db, message_id=5, deleted_at=3000) is True
 
     async with fresh_db.execute(
         "SELECT deleted_at FROM messages WHERE id = ?", (5,)
@@ -168,8 +168,8 @@ async def test_mark_deleted_second_call_returns_false(fresh_db):
         created_at=1000,
         attachments=[],
     )
-    assert await archive.mark_deleted(fresh_db, 6, 3000) is True
-    assert await archive.mark_deleted(fresh_db, 6, 4000) is False
+    assert await archive.mark_deleted(fresh_db, message_id=6, deleted_at=3000) is True
+    assert await archive.mark_deleted(fresh_db, message_id=6, deleted_at=4000) is False
 
     async with fresh_db.execute(
         "SELECT deleted_at FROM messages WHERE id = ?", (6,)
@@ -182,7 +182,7 @@ async def test_mark_deleted_second_call_returns_false(fresh_db):
 async def test_mark_deleted_unknown_message_returns_false(fresh_db):
     from core import archive
 
-    assert await archive.mark_deleted(fresh_db, 999_999, 1234) is False
+    assert await archive.mark_deleted(fresh_db, message_id=999_999, deleted_at=1234) is False
 
 
 def test_cutoff_ts_is_roughly_ttl_days_ago():

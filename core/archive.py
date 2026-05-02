@@ -90,15 +90,15 @@ async def record_edit(
 
 
 async def mark_deleted(
-    db: aiosqlite.Connection, message_id: int, when: int
+    db: aiosqlite.Connection, *, message_id: int, deleted_at: int
 ) -> bool:
-    """Atomically stamp `deleted_at = when` iff the row exists and
-    `deleted_at IS NULL`. Returns True if a row transitioned; False on
+    """Atomically stamp `deleted_at` iff the row exists and the
+    column is NULL. Returns True if a row transitioned; False on
     no-op (row missing or already deleted)."""
     cursor = await db.execute(
         "UPDATE messages SET deleted_at = ? "
         "WHERE id = ? AND deleted_at IS NULL",
-        (when, message_id),
+        (deleted_at, message_id),
     )
     await db.commit()
     return cursor.rowcount > 0
