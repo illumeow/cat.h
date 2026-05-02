@@ -214,6 +214,19 @@ def _is_threads_avatar_fallback(meta: dict[str, Any]) -> bool:
     )
 
 
+def _is_threads_video_frame(meta: dict[str, Any]) -> bool:
+    """Threads has no /reel/-style URL marker, but its video-post
+    og:image goes through Meta's 'cmp1_' image pipeline (a
+    composite-from-video-frame tag visible in the URL's stp= query
+    param). Photo posts use 'cp6_' or no prefix; avatar fallbacks use
+    plain 'dst-jpg_'. Heuristic — false negatives keep current
+    behavior, same trade-off as the IG reel detector."""
+    if meta.get("platform") != "threads":
+        return False
+    stp = meta.get("imageStp")
+    return isinstance(stp, str) and stp.startswith("cmp1_")
+
+
 def _is_instagram_reel(url: str) -> bool:
     """Instagram reel `og:image`s have a play-button glyph baked in, but
     the embed is a static image — we add a footer hint for reels so users
@@ -318,6 +331,8 @@ class LinkEmbedderCog(commands.Cog):
                     embed.set_image(url=meta["image"])
             if _is_instagram_reel(url):
                 embed.set_footer(text="Reel · cannot be played here")
+            elif _is_threads_video_frame(meta):
+                embed.set_footer(text="Video · cannot be played here")
             embeds.append(embed)
         return embeds
 

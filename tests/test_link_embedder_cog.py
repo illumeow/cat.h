@@ -497,3 +497,127 @@ async def test_build_preview_embeds_threads_image_post_keeps_main_image(
     assert embed.image.url == "https://example/post-media.jpg"
     assert embed.thumbnail.url is None
     assert embed.footer.text is None
+
+
+# --- _build_preview_embeds: Threads video frame footer ---------------
+
+
+@pytest.mark.asyncio
+async def test_build_preview_embeds_threads_video_post_gets_video_footer(
+    fresh_db, monkeypatch
+):
+    """Threads video posts have a play-button glyph baked into the
+    og:image, but the embed renders as a static image. We mark the
+    video case with a footer so users don't expect inline playback.
+    Detection: og:image's stp= query param starts with 'cmp1_' (Meta's
+    composite-from-video-frame pipeline tag). Mirrors the existing IG
+    reel handling, which keys on URL path instead since Threads has no
+    /reel/ marker."""
+    from cogs.link_embedder import LinkEmbedderCog
+
+    cog = LinkEmbedderCog(__import__("types").SimpleNamespace(db=fresh_db))
+    cog._http = object()
+    monkeypatch.setattr("cogs.link_embedder.PREVIEW_SERVICE_URL", "http://x")
+
+    video_meta = {
+        "platform": "threads",
+        "url": "https://www.threads.com/@u/post/DX1150kE6jR",
+        "title": "シン (@hsinting._) on Threads",
+        "description": "練習日文",
+        "image": "https://example/video-frame.jpg",
+        "video": None,
+        "siteName": "Threads",
+        "twitterCard": "summary_large_image",
+        "imageStp": "cmp1_dst-jpg_e35_s640x640_tt6",
+    }
+    monkeypatch.setattr(
+        cog, "_fetch_preview", AsyncMock(return_value=video_meta)
+    )
+
+    embeds = await cog._build_preview_embeds(
+        ["https://www.threads.com/@u/post/DX1150kE6jR"]
+    )
+    assert len(embeds) == 1
+    embed = embeds[0]
+    assert embed.image.url == "https://example/video-frame.jpg", (
+        "video frame should still be the full-width hero"
+    )
+    assert embed.thumbnail.url is None
+    assert embed.footer.text == "Video · cannot be played here"
+
+
+@pytest.mark.asyncio
+async def test_build_preview_embeds_instagram_reel_keeps_reel_footer(
+    fresh_db, monkeypatch
+):
+    """Regression guard for Task 3: IG reels keep the existing
+    'Reel · cannot be played here' wording. The two video-footer rules
+    (IG via /reel/ URL path, Threads via cmp1_ stp= prefix) coexist
+    independently and use platform-correct labels."""
+    from cogs.link_embedder import LinkEmbedderCog
+
+    cog = LinkEmbedderCog(__import__("types").SimpleNamespace(db=fresh_db))
+    cog._http = object()
+    monkeypatch.setattr("cogs.link_embedder.PREVIEW_SERVICE_URL", "http://x")
+
+    reel_meta = {
+        "platform": "instagram",
+        "url": "https://www.instagram.com/reel/abc123/",
+        "title": "Reel by @user",
+        "description": "Reel caption",
+        "image": "https://example/reel-frame.jpg",
+        "video": None,
+        "siteName": "Instagram",
+        "twitterCard": "summary_large_image",
+        "imageStp": "cmp1_dst-jpg_e35_s640x640_tt6",
+    }
+    monkeypatch.setattr(
+        cog, "_fetch_preview", AsyncMock(return_value=reel_meta)
+    )
+
+    embeds = await cog._build_preview_embeds(
+        ["https://www.instagram.com/reel/abc123/"]
+    )
+    assert len(embeds) == 1
+    embed = embeds[0]
+    assert embed.image.url == "https://example/reel-frame.jpg"
+    assert embed.footer.text == "Reel · cannot be played here", (
+        "IG reels must keep the Reel-specific wording even though the "
+        "Threads cmp1_ rule could theoretically also fire — IG is gated "
+        "out by platform check"
+    )
+
+
+@pytest.mark.asyncio
+async def test_build_preview_embeds_instagram_normal_post_no_footer(
+    fresh_db, monkeypatch
+):
+    """Regression guard: a normal IG /p/ post (no /reel/) gets no footer
+    even when the Threads-style cmp1_ signal is present. Both video-
+    detection rules are platform-gated."""
+    from cogs.link_embedder import LinkEmbedderCog
+
+    cog = LinkEmbedderCog(__import__("types").SimpleNamespace(db=fresh_db))
+    cog._http = object()
+    monkeypatch.setattr("cogs.link_embedder.PREVIEW_SERVICE_URL", "http://x")
+
+    post_meta = {
+        "platform": "instagram",
+        "url": "https://www.instagram.com/p/abc123/",
+        "title": "Post by @user",
+        "description": "Caption",
+        "image": "https://example/post.jpg",
+        "video": None,
+        "siteName": "Instagram",
+        "twitterCard": "summary_large_image",
+        "imageStp": "cmp1_dst-jpg_e35_s640x640_tt6",
+    }
+    monkeypatch.setattr(
+        cog, "_fetch_preview", AsyncMock(return_value=post_meta)
+    )
+
+    embeds = await cog._build_preview_embeds(
+        ["https://www.instagram.com/p/abc123/"]
+    )
+    assert len(embeds) == 1
+    assert embeds[0].footer.text is None
