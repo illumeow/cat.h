@@ -2,6 +2,7 @@
 
 import time
 
+import aiohttp
 import pytest
 
 
@@ -380,9 +381,6 @@ async def test_pending_attachments_restrict_empty_short_circuits(fresh_db):
     assert await archive.pending_attachments(
         fresh_db, 41, restrict_to_db_ids=set()
     ) == []
-
-
-import aiohttp
 
 
 class _FakeStream:
