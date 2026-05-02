@@ -4,6 +4,12 @@ Slash commands and automatic behaviors, per cog. For setup and deployment see [U
 
 After the bot connects for the first time it runs `tree.sync()`. Discord can take up to an hour to refresh the slash command list in your client — if commands are missing, give it time or kick + re-invite the bot.
 
+## Help
+
+| Command | Who | Effect |
+|---|---|---|
+| `/help` | anyone | Show a summary of the user-facing features (Birthday + Link cleaner). Ephemeral output. Intentionally omits `/archive`, which is moderator-only and hidden from regular members anyway. |
+
 ## Birthday
 
 | Command | Who | Effect |

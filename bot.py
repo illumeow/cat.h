@@ -22,6 +22,7 @@ EXTENSIONS: tuple[tuple[str, str], ...] = (
     ("cogs.birthday", "BIRTHDAY_ENABLED"),
     ("cogs.archive", "ARCHIVE_ENABLED"),
     ("cogs.link_embedder", "LINK_EMBEDDER_ENABLED"),
+    ("cogs.help", "HELP_ENABLED"),
 )
 
 log = logging.getLogger(__name__)
