@@ -127,22 +127,44 @@ async function probe(targetUrl) {
           .querySelector(`meta[${attr}="${name}"]`)
           ?.getAttribute('content')
           ?.trim() || null;
+      const ogImage =
+        get('property', 'og:image') ||
+        get('name', 'twitter:image') ||
+        null;
+      // The `stp` query param tags Meta's image-pipeline output. Threads
+      // video posts (whose og:image is a play-button-stamped frame) ship
+      // through the `cmp1_` pipeline; photo posts use `cp6_` or no
+      // prefix; avatar fallbacks use plain `dst-jpg_`. The bot's
+      // `_is_threads_video_frame` helper keys on this. Parsed here
+      // because the sidecar already has URL-parsing context; null when
+      // there's no og:image or no stp= param.
+      let imageStp = null;
+      if (ogImage) {
+        try {
+          imageStp = new URL(ogImage).searchParams.get('stp');
+        } catch (_) {
+          imageStp = null;
+        }
+      }
       return {
         title: get('property', 'og:title') || document.title || null,
         description:
           get('property', 'og:description') ||
           get('name', 'description') ||
           null,
-        image:
-          get('property', 'og:image') ||
-          get('name', 'twitter:image') ||
-          null,
+        image: ogImage,
         video:
           get('property', 'og:video') ||
           get('property', 'og:video:url') ||
           get('name', 'twitter:player:stream') ||
           null,
         siteName: get('property', 'og:site_name') || null,
+        // New: drives the bot's avatar-fallback detection. Threads emits
+        // `summary` exactly when the post has no media (og:image is the
+        // poster's avatar); `summary_large_image` whenever real post
+        // media is present.
+        twitterCard: get('name', 'twitter:card'),
+        imageStp,
       };
     });
     return meta;
