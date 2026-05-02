@@ -1,8 +1,7 @@
 import logging
 import os
-import shutil
 import time as time_mod
-from datetime import datetime, time, timedelta, timezone
+from datetime import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
@@ -12,7 +11,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
-from core import mod_log
+from core import archive, mod_log
 from core.utils import is_channel_or_parent_in, parse_id_set
 
 if TYPE_CHECKING:
@@ -31,14 +30,6 @@ USER_EXCLUDED_CHANNELS = parse_id_set(os.environ.get("ARCHIVE_EXCLUDED_CHANNELS"
 EXCLUDED_CHANNELS = USER_EXCLUDED_CHANNELS | (
     {MOD_LOG_CHANNEL_ID} if MOD_LOG_CHANNEL_ID else set()
 )
-
-ATTACHMENTS_DIR = Path(__file__).resolve().parent.parent / "data" / "attachments"
-# Retention window for everything the archive cog purges nightly: message
-# rows + edits + attachments, plus webhook_reposts (✅/❌ both delete the
-# row when processed, so this only governs the rare case where the user
-# never reacts).
-TTL_DAYS = 90
-MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024  # 25 MB
 
 
 def _now() -> int:
@@ -78,6 +69,23 @@ class ArchiveCog(commands.Cog):
             return False
         return True
 
+    @staticmethod
+    def _attachment_summary(rows: list[archive.Attachment]) -> str | None:
+        """Format the bullet list used in deletion / removal mod-log
+        embeds from a list of Attachment rows already fetched by the
+        caller."""
+        if not rows:
+            return None
+        lines = []
+        for att in rows:
+            if att.local_path:
+                lines.append(f"• `{att.filename}` (saved)")
+            elif att.skipped_reason:
+                lines.append(f"• `{att.filename}` ({att.skipped_reason})")
+            else:
+                lines.append(f"• `{att.filename}`")
+        return "\n".join(lines)
+
     # --- listeners ---------------------------------------------------------
 
     @commands.Cog.listener()
@@ -86,27 +94,24 @@ class ArchiveCog(commands.Cog):
             return  # DM — also narrows message.guild for the type checker
         if not self._should_log(message):
             return
-        await self.bot.db.execute(
-            "INSERT OR IGNORE INTO messages "
-            "(id, channel_id, guild_id, author_id, content, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (
-                message.id,
-                message.channel.id,
-                message.guild.id,
-                message.author.id,
-                message.content,
-                int(message.created_at.timestamp()),
-            ),
+        await archive.record(
+            self.bot.db,
+            message_id=message.id,
+            channel_id=message.channel.id,
+            guild_id=message.guild.id,
+            author_id=message.author.id,
+            content=message.content,
+            created_at=int(message.created_at.timestamp()),
+            attachments=[
+                archive.AttachmentSpec(
+                    filename=att.filename,
+                    url=att.url,
+                    content_type=att.content_type,
+                    size=att.size,
+                )
+                for att in message.attachments
+            ],
         )
-        for att in message.attachments:
-            await self.bot.db.execute(
-                "INSERT INTO attachments "
-                "(message_id, filename, url, content_type, size) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (message.id, att.filename, att.url, att.content_type, att.size),
-            )
-        await self.bot.db.commit()
 
     @commands.Cog.listener()
     async def on_raw_message_edit(self, payload: discord.RawMessageUpdateEvent) -> None:
@@ -127,14 +132,9 @@ class ArchiveCog(commands.Cog):
         if not has_content and not has_attachments:
             return
 
-        async with self.bot.db.execute(
-            "SELECT content, author_id FROM messages WHERE id = ?",
-            (payload.message_id,),
-        ) as cur:
-            row = await cur.fetchone()
-        if row is None:
+        archived = await archive.get(self.bot.db, payload.message_id)
+        if archived is None:
             return
-        prior_content, author_id = row
 
         # 1) Attachment removal — eagerly download anything the user dropped
         # before its CDN URL stops resolving. We compare URL paths (ignoring
@@ -145,24 +145,27 @@ class ArchiveCog(commands.Cog):
             payload_att_paths = {
                 a["url"].split("?", 1)[0] for a in payload.data["attachments"]
             }
-            async with self.bot.db.execute(
-                "SELECT id, url FROM attachments "
-                "WHERE message_id = ? "
-                "AND local_path IS NULL AND skipped_reason IS NULL",
-                (payload.message_id,),
-            ) as cur:
-                pending = await cur.fetchall()
+            pending = await archive.pending_attachments(
+                self.bot.db, payload.message_id
+            )
             removed_db_ids = {
-                att_id
-                for att_id, url in pending
-                if url.split("?", 1)[0] not in payload_att_paths
+                att.id
+                for att in pending
+                if att.url.split("?", 1)[0] not in payload_att_paths
             }
-            if removed_db_ids:
-                await self._download_attachments(
-                    payload.message_id, restrict_to_db_ids=removed_db_ids
+            if removed_db_ids and self._http is not None:
+                await archive.download_pending(
+                    self.bot.db,
+                    self._http,
+                    payload.message_id,
+                    restrict_to_db_ids=removed_db_ids,
                 )
-                summary = await self._attachment_summary(
-                    payload.message_id, restrict_to_db_ids=removed_db_ids
+                summary = self._attachment_summary(
+                    await archive.get_attachments(
+                        self.bot.db,
+                        payload.message_id,
+                        restrict_to_db_ids=removed_db_ids,
+                    )
                 )
                 if summary is not None:
                     await mod_log.post_attachment_removed(
@@ -170,7 +173,7 @@ class ArchiveCog(commands.Cog):
                         MOD_LOG_CHANNEL_ID,
                         guild_id=guild_id,
                         message_id=payload.message_id,
-                        author_id=author_id,
+                        author_id=archived.author_id,
                         source_channel_id=payload.channel_id,
                         attachments_summary=summary,
                     )
@@ -179,29 +182,26 @@ class ArchiveCog(commands.Cog):
         if not has_content:
             return
         new_content = payload.data["content"]
-        if prior_content == new_content:
+        if archived.content == new_content:
             return
 
         now = _now()
-        await self.bot.db.execute(
-            "INSERT INTO message_edits (message_id, content, edited_at) "
-            "VALUES (?, ?, ?)",
-            (payload.message_id, prior_content, now),
+        await archive.record_edit(
+            self.bot.db,
+            message_id=payload.message_id,
+            prior_content=archived.content,
+            new_content=new_content,
+            edited_at=now,
         )
-        await self.bot.db.execute(
-            "UPDATE messages SET content = ?, edited_at = ? WHERE id = ?",
-            (new_content, now, payload.message_id),
-        )
-        await self.bot.db.commit()
 
         sent = await mod_log.post_edited(
             self.bot,
             MOD_LOG_CHANNEL_ID,
             guild_id=guild_id,
             message_id=payload.message_id,
-            author_id=author_id,
+            author_id=archived.author_id,
             source_channel_id=payload.channel_id,
-            before=prior_content,
+            before=archived.content,
             after=new_content,
         )
         # Hand the link embedder a way to re-target this notice's jump URL
@@ -227,9 +227,6 @@ class ArchiveCog(commands.Cog):
         suppress_mod_log = payload.message_id in self.bot.suppressed_deletes
         self.bot.suppressed_deletes.discard(payload.message_id)
 
-        # Channel-level exclusion before any DB or disk work. Helper also
-        # catches Discord-thread parents added to the exclusion list after
-        # the message was archived.
         if is_channel_or_parent_in(self.bot, payload.channel_id, EXCLUDED_CHANNELS):
             return
 
@@ -242,170 +239,51 @@ class ArchiveCog(commands.Cog):
             )
             return
 
-        async with self.bot.db.execute(
-            "SELECT author_id, content, deleted_at FROM messages WHERE id = ?",
-            (payload.message_id,),
-        ) as cur:
-            row = await cur.fetchone()
-        if row is None:
+        archived = await archive.get(self.bot.db, payload.message_id)
+        if archived is None:
             return
-        author_id, content, already_deleted = row
-        if already_deleted is not None:
-            return  # double-delete event (shouldn't happen, but be safe)
+        if not await archive.mark_deleted(
+            self.bot.db, message_id=payload.message_id, deleted_at=_now()
+        ):
+            return  # already deleted (double-delete event)
 
-        now = _now()
-        await self.bot.db.execute(
-            "UPDATE messages SET deleted_at = ? WHERE id = ?",
-            (now, payload.message_id),
+        if self._http is not None:
+            await archive.download_pending(
+                self.bot.db, self._http, payload.message_id
+            )
+        attachments_summary = self._attachment_summary(
+            await archive.get_attachments(self.bot.db, payload.message_id)
         )
-        await self.bot.db.commit()
-
-        await self._download_attachments(payload.message_id)
-        attachments_summary = await self._attachment_summary(payload.message_id)
 
         await mod_log.post_deleted(
             self.bot,
             MOD_LOG_CHANNEL_ID,
             message_id=payload.message_id,
-            author_id=author_id,
+            author_id=archived.author_id,
             source_channel_id=payload.channel_id,
-            content=content,
+            content=archived.content,
             attachments_summary=attachments_summary,
         )
-
-    # --- attachment download ----------------------------------------------
-
-    async def _download_attachments(
-        self,
-        message_id: int,
-        restrict_to_db_ids: set[int] | None = None,
-    ) -> None:
-        """Download any attachments for this message that haven't yet been
-        processed (local_path and skipped_reason are both NULL). Idempotent —
-        rows already saved or skipped are left alone, so calling this from
-        both the edit handler (for removed attachments) and the delete
-        handler is safe and won't re-fetch the same file twice.
-
-        If restrict_to_db_ids is given, only those `attachments.id` rows are
-        considered; this lets the edit handler grab just the removed-from-
-        message attachments without prematurely downloading the still-live
-        ones (those stay lazy until the message is deleted).
-        """
-        if self._http is None:
-            return
-
-        sql = (
-            "SELECT id, filename, url, size FROM attachments "
-            "WHERE message_id = ? "
-            "AND local_path IS NULL AND skipped_reason IS NULL"
-        )
-        params: list[object] = [message_id]
-        if restrict_to_db_ids is not None:
-            if not restrict_to_db_ids:
-                return
-            placeholders = ",".join(["?"] * len(restrict_to_db_ids))
-            sql += f" AND id IN ({placeholders})"
-            params.extend(restrict_to_db_ids)
-
-        async with self.bot.db.execute(sql, params) as cur:
-            rows = await cur.fetchall()
-
-        for att_id, filename, url, size in rows:
-            if size is not None and size > MAX_ATTACHMENT_BYTES:
-                await self.bot.db.execute(
-                    "UPDATE attachments SET skipped_reason = ? WHERE id = ?",
-                    ("too_large", att_id),
-                )
-                continue
-
-            target_dir = ATTACHMENTS_DIR / str(message_id)
-            target_dir.mkdir(parents=True, exist_ok=True)
-            target_path = target_dir / filename
-
-            try:
-                async with self._http.get(url) as resp:
-                    if resp.status != 200:
-                        await self.bot.db.execute(
-                            "UPDATE attachments SET skipped_reason = ? WHERE id = ?",
-                            (f"http_{resp.status}", att_id),
-                        )
-                        continue
-                    with open(target_path, "wb") as f:
-                        async for chunk in resp.content.iter_chunked(64 * 1024):
-                            f.write(chunk)
-                await self.bot.db.execute(
-                    "UPDATE attachments SET local_path = ? WHERE id = ?",
-                    (str(target_path), att_id),
-                )
-            except (aiohttp.ClientError, OSError):
-                log.exception("Attachment download failed for %s", url)
-                await self.bot.db.execute(
-                    "UPDATE attachments SET skipped_reason = ? WHERE id = ?",
-                    ("download_failed", att_id),
-                )
-
-        await self.bot.db.commit()
-
-    async def _attachment_summary(
-        self,
-        message_id: int,
-        restrict_to_db_ids: set[int] | None = None,
-    ) -> str | None:
-        """Format the bullet list used in deletion / removal mod-log embeds
-        from the current state of the attachments table."""
-        sql = (
-            "SELECT filename, local_path, skipped_reason FROM attachments "
-            "WHERE message_id = ?"
-        )
-        params: list[object] = [message_id]
-        if restrict_to_db_ids is not None:
-            if not restrict_to_db_ids:
-                return None
-            placeholders = ",".join(["?"] * len(restrict_to_db_ids))
-            sql += f" AND id IN ({placeholders})"
-            params.extend(restrict_to_db_ids)
-
-        async with self.bot.db.execute(sql, params) as cur:
-            rows = await cur.fetchall()
-        if not rows:
-            return None
-
-        lines = []
-        for filename, local_path, skipped_reason in rows:
-            if local_path:
-                lines.append(f"• `{filename}` (saved)")
-            elif skipped_reason:
-                lines.append(f"• `{filename}` ({skipped_reason})")
-            else:
-                lines.append(f"• `{filename}`")
-        return "\n".join(lines)
 
     # --- TTL purge ---------------------------------------------------------
 
     @tasks.loop(time=PURGE_TIME)
     async def daily_purge(self) -> None:
-        cutoff = int(
-            (datetime.now(timezone.utc) - timedelta(days=TTL_DAYS)).timestamp()
-        )
-        async with self.bot.db.execute(
-            "SELECT id FROM messages WHERE created_at < ?", (cutoff,)
-        ) as cur:
-            ids = [row[0] for row in await cur.fetchall()]
+        purged = await archive.purge_expired(self.bot.db)
+        # Shared TTL window: webhook_reposts uses the same 90-day cap as
+        # the archive but it's the link embedder's table. We run the
+        # DELETE here because daily_purge already exists; revisit when
+        # the link embedder grows its own scheduled work.
         await self.bot.db.execute(
-            "DELETE FROM messages WHERE created_at < ?", (cutoff,)
-        )
-        await self.bot.db.execute(
-            "DELETE FROM webhook_reposts WHERE posted_at < ?", (cutoff,)
+            "DELETE FROM webhook_reposts WHERE posted_at < ?",
+            (archive.cutoff_ts(),),
         )
         await self.bot.db.commit()
 
-        for mid in ids:
-            d = ATTACHMENTS_DIR / str(mid)
-            if d.exists():
-                shutil.rmtree(d, ignore_errors=True)
-
         log.info(
-            "Purged %d archived messages older than %d days", len(ids), TTL_DAYS
+            "Purged %d archived messages older than %d days",
+            purged,
+            archive.TTL_DAYS,
         )
 
     @daily_purge.before_loop
@@ -440,23 +318,12 @@ class ArchiveCog(commands.Cog):
         channel: discord.TextChannel | None = None,
         limit: app_commands.Range[int, 1, 25] = 10,
     ) -> None:
-        sql = (
-            "SELECT id, channel_id, author_id, content, edited_at, deleted_at "
-            "FROM messages WHERE deleted_at IS NOT NULL"
+        rows = await archive.list_deleted(
+            self.bot.db,
+            user_id=user.id if user else None,
+            channel_id=channel.id if channel else None,
+            limit=limit,
         )
-        params: list[object] = []
-        if user is not None:
-            sql += " AND author_id = ?"
-            params.append(user.id)
-        if channel is not None:
-            sql += " AND channel_id = ?"
-            params.append(channel.id)
-        sql += " ORDER BY deleted_at DESC LIMIT ?"
-        params.append(limit)
-
-        async with self.bot.db.execute(sql, params) as cur:
-            rows = await cur.fetchall()
-
         if not rows:
             await interaction.response.send_message(
                 "No deleted messages match.", ephemeral=True
@@ -464,12 +331,12 @@ class ArchiveCog(commands.Cog):
             return
 
         lines = []
-        for mid, ch_id, auth_id, content, edited_at, deleted_at in rows:
-            edit_marker = " *(edited)*" if edited_at else ""
-            preview = (content or "*(empty)*").replace("\n", " ")[:120]
+        for r in rows:
+            edit_marker = " *(edited)*" if r.edited_at else ""
+            preview = (r.content or "*(empty)*").replace("\n", " ")[:120]
             lines.append(
-                f"`{mid}` <t:{deleted_at}:R> by <@{auth_id}> in <#{ch_id}>{edit_marker}\n"
-                f"> {preview}"
+                f"`{r.id}` <t:{r.deleted_at}:R> by <@{r.author_id}> "
+                f"in <#{r.channel_id}>{edit_marker}\n> {preview}"
             )
 
         embed = discord.Embed(
@@ -499,59 +366,46 @@ class ArchiveCog(commands.Cog):
             )
             return
 
-        async with self.bot.db.execute(
-            "SELECT channel_id, author_id, content, created_at, edited_at, deleted_at "
-            "FROM messages WHERE id = ?",
-            (mid,),
-        ) as cur:
-            row = await cur.fetchone()
-        if row is None:
+        archived = await archive.get(self.bot.db, mid)
+        if archived is None:
             await interaction.response.send_message(
                 "Not found in the archive.", ephemeral=True
             )
             return
-        ch_id, auth_id, content, created_at, edited_at, deleted_at = row
 
-        async with self.bot.db.execute(
-            "SELECT content, edited_at FROM message_edits "
-            "WHERE message_id = ? ORDER BY edited_at DESC",
-            (mid,),
-        ) as cur:
-            edits = await cur.fetchall()
-
-        async with self.bot.db.execute(
-            "SELECT filename, local_path, skipped_reason "
-            "FROM attachments WHERE message_id = ?",
-            (mid,),
-        ) as cur:
-            attachments = await cur.fetchall()
+        edits = await archive.get_edits(self.bot.db, mid)
+        attachments = await archive.get_attachments(self.bot.db, mid)
 
         embed = discord.Embed(title=f"Message `{mid}`", color=discord.Color.blue())
-        embed.add_field(name="Author", value=f"<@{auth_id}>", inline=True)
-        embed.add_field(name="Channel", value=f"<#{ch_id}>", inline=True)
-        embed.add_field(name="Created", value=f"<t:{created_at}:F>", inline=False)
-        if deleted_at:
-            embed.add_field(name="Deleted", value=f"<t:{deleted_at}:F>", inline=False)
+        embed.add_field(name="Author", value=f"<@{archived.author_id}>", inline=True)
+        embed.add_field(name="Channel", value=f"<#{archived.channel_id}>", inline=True)
+        embed.add_field(
+            name="Created", value=f"<t:{archived.created_at}:F>", inline=False
+        )
+        if archived.deleted_at:
+            embed.add_field(
+                name="Deleted", value=f"<t:{archived.deleted_at}:F>", inline=False
+            )
         embed.add_field(
             name="Latest content",
-            value=mod_log.truncate(content, mod_log.FIELD_VALUE_MAX),
+            value=mod_log.truncate(archived.content, mod_log.FIELD_VALUE_MAX),
             inline=False,
         )
-        for i, (edit_content, edit_at) in enumerate(edits, start=1):
+        for i, edit in enumerate(edits, start=1):
             embed.add_field(
-                name=f"Prior version {i} (saved <t:{edit_at}:R>)",
-                value=mod_log.truncate(edit_content, mod_log.FIELD_VALUE_MAX),
+                name=f"Prior version {i} (saved <t:{edit.edited_at}:R>)",
+                value=mod_log.truncate(edit.content, mod_log.FIELD_VALUE_MAX),
                 inline=False,
             )
         if attachments:
             lines = []
-            for filename, local_path, skipped_reason in attachments:
-                if local_path:
-                    lines.append(f"• `{filename}` → `{local_path}`")
-                elif skipped_reason:
-                    lines.append(f"• `{filename}` (skipped: {skipped_reason})")
+            for att in attachments:
+                if att.local_path:
+                    lines.append(f"• `{att.filename}` → `{att.local_path}`")
+                elif att.skipped_reason:
+                    lines.append(f"• `{att.filename}` (skipped: {att.skipped_reason})")
                 else:
-                    lines.append(f"• `{filename}` (not downloaded)")
+                    lines.append(f"• `{att.filename}` (not downloaded)")
             embed.add_field(
                 name="Attachments",
                 value=mod_log.truncate("\n".join(lines), mod_log.FIELD_VALUE_MAX),
@@ -579,14 +433,8 @@ class ArchiveCog(commands.Cog):
             )
             return
 
-        async with self.bot.db.execute(
-            "SELECT filename, local_path, skipped_reason "
-            "FROM attachments WHERE message_id = ?",
-            (mid,),
-        ) as cur:
-            rows = await cur.fetchall()
-
-        if not rows:
+        attachments = await archive.get_attachments(self.bot.db, mid)
+        if not attachments:
             await interaction.response.send_message(
                 "No attachments archived for that message.", ephemeral=True
             )
@@ -598,26 +446,26 @@ class ArchiveCog(commands.Cog):
 
         files: list[discord.File] = []
         notes: list[str] = []
-        for filename, local_path, skipped_reason in rows:
-            if local_path:
-                path = Path(local_path)
+        for att in attachments:
+            if att.local_path:
+                path = Path(att.local_path)
                 if path.exists():
-                    files.append(discord.File(path, filename=filename))
+                    files.append(discord.File(path, filename=att.filename))
                 else:
                     notes.append(
-                        f"• `{filename}` — DB says saved but file is missing on disk"
+                        f"• `{att.filename}` — DB says saved but file is missing on disk"
                     )
-            elif skipped_reason:
+            elif att.skipped_reason:
                 notes.append(
-                    f"• `{filename}` — skipped at download time ({skipped_reason})"
+                    f"• `{att.filename}` — skipped at download time ({att.skipped_reason})"
                 )
             else:
                 notes.append(
-                    f"• `{filename}` — not downloaded yet (message still live)"
+                    f"• `{att.filename}` — not downloaded yet (message still live)"
                 )
 
         # Empty content is fine here: when there are no notes, `files` is
-        # always non-empty (we early-returned on `not rows`), so Discord still
+        # always non-empty (we early-returned on `not attachments`), so Discord still
         # has something to render. Avoids passing None where Pylance expects str.
         content = "\n".join(notes)
         # `discord.File(path, …)` opens the file at construction. Whether
