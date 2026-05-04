@@ -242,6 +242,15 @@ class LinkEmbedderCog(commands.Cog):
         self.bot = bot
         self._webhook_cache: dict[int, discord.Webhook] = {}
         self._http: aiohttp.ClientSession | None = None
+        # Original message IDs currently inside `_process_message`. Discord
+        # fires MESSAGE_UPDATE when it auto-generates an embed for a URL in
+        # a message (most aggressively for YouTube — embed appears within
+        # ~200ms of MESSAGE_CREATE, racing our delete of the original), and
+        # the payload's `content` field is indistinguishable from a real
+        # content edit. Without this guard the on_raw_message_edit handler
+        # re-fires while on_message's processing is still in flight and the
+        # webhook repost gets sent twice. In-memory only — restarts clear it.
+        self._processing: set[int] = set()
 
     async def cog_load(self) -> None:
         self._http = aiohttp.ClientSession()
@@ -456,107 +465,118 @@ class LinkEmbedderCog(commands.Cog):
         if not matched_urls:
             return
 
-        webhook = await self._get_webhook(parent_channel)
-        if webhook is None:
-            # No webhook permission — leave the original message alone.
+        # Re-entrancy guard. The check + add is atomic (no await between),
+        # so two concurrent _process_message tasks for the same message ID
+        # — typically on_message and on_raw_message_edit racing each other
+        # when Discord auto-generates an embed for the URL — see consistent
+        # state and only one proceeds.
+        if message.id in self._processing:
             return
-
-        # Build custom embeds from the preview sidecar before sending so we
-        # can attach them in one go. When we have custom embeds we wrap
-        # each rewritten URL in <…> in the message body — Discord renders
-        # bare URLs with an auto-preview by default, and our explicit
-        # embeds would compete with (and double-render alongside) those.
-        # We can't use suppress_embeds=True for this: it sets the message's
-        # SUPPRESS_EMBEDS flag, which hides every embed including our own.
-        # URLs from rules with preview=False (Dcard) are excluded from
-        # both the sidecar lookup and the wrapping — they stay bare so
-        # Discord's native auto-embed can still try.
-        preview_urls = _preview_eligible_urls(message.content)
-        embeds = await self._build_preview_embeds(preview_urls)
-        body = new_content
-        if embeds:
-            for url in set(preview_urls):
-                body = body.replace(url, f"<{url}>")
-
-        # Post the rewritten copy first; if that fails we don't want to leave
-        # the channel with neither version.
-        send_kwargs: dict = {
-            "content": body,
-            "username": message.author.display_name,
-            "avatar_url": message.author.display_avatar.url,
-            "wait": True,
-            "allowed_mentions": discord.AllowedMentions.none(),
-        }
-        if thread is not None:
-            send_kwargs["thread"] = thread
-        if embeds:
-            send_kwargs["embeds"] = embeds
+        self._processing.add(message.id)
         try:
-            sent = await webhook.send(**send_kwargs)
-        except discord.HTTPException:
-            log.exception("Webhook send failed in channel %s", message.channel.id)
-            return
+            webhook = await self._get_webhook(parent_channel)
+            if webhook is None:
+                # No webhook permission — leave the original message alone.
+                return
 
-        # Insert the tracking row BEFORE deleting the original. If the bot
-        # crashes between the webhook send and the original-delete, the
-        # worst case is a duplicate visible message (recoverable: user
-        # ❌'s the webhook, or manually deletes either copy). If we
-        # inserted *after* the delete instead, a crash there would leave
-        # a webhook repost in chat with no DB row, which the cog can't
-        # match against any reaction → ❌ silently no-ops forever. We
-        # persist the user's original message ID alongside the webhook's
-        # so a later ❌ can show an /archive-show-able ID in the mod-log
-        # "Deleted" notice (the webhook repost itself isn't archived;
-        # the original is).
-        await webhook_reposts.record(
-            self.bot.db,
-            webhook_message_id=sent.id,
-            channel_id=message.channel.id,
-            original_author_id=message.author.id,
-            cleaned_content=new_content,
-            posted_at=int(time_mod.time()),
-            original_message_id=message.id,
-        )
+            # Build custom embeds from the preview sidecar before sending so we
+            # can attach them in one go. When we have custom embeds we wrap
+            # each rewritten URL in <…> in the message body — Discord renders
+            # bare URLs with an auto-preview by default, and our explicit
+            # embeds would compete with (and double-render alongside) those.
+            # We can't use suppress_embeds=True for this: it sets the message's
+            # SUPPRESS_EMBEDS flag, which hides every embed including our own.
+            # URLs from rules with preview=False (Dcard) are excluded from
+            # both the sidecar lookup and the wrapping — they stay bare so
+            # Discord's native auto-embed can still try.
+            preview_urls = _preview_eligible_urls(message.content)
+            embeds = await self._build_preview_embeds(preview_urls)
+            body = new_content
+            if embeds:
+                for url in set(preview_urls):
+                    body = body.replace(url, f"<{url}>")
 
-        # Mark the original delete as bot-initiated so the archive cog
-        # skips the mod-log notice. Then attempt the delete; on Forbidden
-        # we keep the duplicate (signal to the operator to fix the
-        # Manage Messages perm).
-        self.bot.suppressed_deletes.add(message.id)
-        try:
-            await message.delete()
-        except discord.Forbidden:
-            self.bot.suppressed_deletes.discard(message.id)
-            log.warning(
-                "Missing Manage Messages in channel %s; original kept alongside repost",
-                message.channel.id,
+            # Post the rewritten copy first; if that fails we don't want to leave
+            # the channel with neither version.
+            send_kwargs: dict = {
+                "content": body,
+                "username": message.author.display_name,
+                "avatar_url": message.author.display_avatar.url,
+                "wait": True,
+                "allowed_mentions": discord.AllowedMentions.none(),
+            }
+            if thread is not None:
+                send_kwargs["thread"] = thread
+            if embeds:
+                send_kwargs["embeds"] = embeds
+            try:
+                sent = await webhook.send(**send_kwargs)
+            except discord.HTTPException:
+                log.exception("Webhook send failed in channel %s", message.channel.id)
+                return
+
+            # Insert the tracking row BEFORE deleting the original. If the bot
+            # crashes between the webhook send and the original-delete, the
+            # worst case is a duplicate visible message (recoverable: user
+            # ❌'s the webhook, or manually deletes either copy). If we
+            # inserted *after* the delete instead, a crash there would leave
+            # a webhook repost in chat with no DB row, which the cog can't
+            # match against any reaction → ❌ silently no-ops forever. We
+            # persist the user's original message ID alongside the webhook's
+            # so a later ❌ can show an /archive-show-able ID in the mod-log
+            # "Deleted" notice (the webhook repost itself isn't archived;
+            # the original is).
+            await webhook_reposts.record(
+                self.bot.db,
+                webhook_message_id=sent.id,
+                channel_id=message.channel.id,
+                original_author_id=message.author.id,
+                cleaned_content=new_content,
+                posted_at=int(time_mod.time()),
+                original_message_id=message.id,
             )
-        except discord.HTTPException:
-            self.bot.suppressed_deletes.discard(message.id)
-            log.exception("Failed to delete original message %s", message.id)
 
-        try:
-            await sent.add_reaction(CONFIRM_EMOJI)
-            await sent.add_reaction(DELETE_EMOJI)
-        except discord.HTTPException:
-            log.exception("Failed to seed reactions on webhook repost %s", sent.id)
-
-        # If this rewrite was triggered by an edit, the archive cog has just
-        # posted (or is about to post) an "Edited" mod-log notice whose jump
-        # URL points at the now-deleted original. Re-target it at the
-        # webhook repost so a moderator clicking through lands at the live
-        # message. Best-effort — if the archive entry isn't there yet (rare
-        # scheduling order) we just leave the URL stale.
-        if is_edit and message.guild is not None:
-            mod_log_msg_id = self.bot.recent_edit_mod_logs.pop(message.id, None)
-            if mod_log_msg_id is not None:
-                await self._retarget_edit_mod_log(
-                    mod_log_msg_id,
-                    repost_url=(
-                        f"https://discord.com/channels/{message.guild.id}/"
-                        f"{message.channel.id}/{sent.id}"
-                    ),
+            # Mark the original delete as bot-initiated so the archive cog
+            # skips the mod-log notice. Then attempt the delete; on Forbidden
+            # we keep the duplicate (signal to the operator to fix the
+            # Manage Messages perm).
+            self.bot.suppressed_deletes.add(message.id)
+            try:
+                await message.delete()
+            except discord.Forbidden:
+                self.bot.suppressed_deletes.discard(message.id)
+                log.warning(
+                    "Missing Manage Messages in channel %s; original kept alongside repost",
+                    message.channel.id,
                 )
+            except discord.HTTPException:
+                self.bot.suppressed_deletes.discard(message.id)
+                log.exception("Failed to delete original message %s", message.id)
+
+            try:
+                await sent.add_reaction(CONFIRM_EMOJI)
+                await sent.add_reaction(DELETE_EMOJI)
+            except discord.HTTPException:
+                log.exception("Failed to seed reactions on webhook repost %s", sent.id)
+
+            # If this rewrite was triggered by an edit, the archive cog has just
+            # posted (or is about to post) an "Edited" mod-log notice whose jump
+            # URL points at the now-deleted original. Re-target it at the
+            # webhook repost so a moderator clicking through lands at the live
+            # message. Best-effort — if the archive entry isn't there yet (rare
+            # scheduling order) we just leave the URL stale.
+            if is_edit and message.guild is not None:
+                mod_log_msg_id = self.bot.recent_edit_mod_logs.pop(message.id, None)
+                if mod_log_msg_id is not None:
+                    await self._retarget_edit_mod_log(
+                        mod_log_msg_id,
+                        repost_url=(
+                            f"https://discord.com/channels/{message.guild.id}/"
+                            f"{message.channel.id}/{sent.id}"
+                        ),
+                    )
+        finally:
+            self._processing.discard(message.id)
 
     async def _retarget_edit_mod_log(
         self, mod_log_message_id: int, *, repost_url: str
