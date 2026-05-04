@@ -39,6 +39,19 @@ async def get(db: aiosqlite.Connection, user_id: int) -> Birthday | None:
     return None if row is None else Birthday(month=row[0], day=row[1])
 
 
+async def list_all(
+    db: aiosqlite.Connection,
+) -> list[tuple[int, Birthday]]:
+    """All registered birthdays as (user_id, Birthday) sorted by (month, day)."""
+    async with db.execute(
+        "SELECT user_id, month, day FROM birthdays ORDER BY month, day"
+    ) as cursor:
+        return [
+            (row[0], Birthday(month=row[1], day=row[2]))
+            for row in await cursor.fetchall()
+        ]
+
+
 async def users_with_birthday_on(
     db: aiosqlite.Connection, today: date
 ) -> list[int]:

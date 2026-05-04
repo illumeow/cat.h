@@ -97,6 +97,28 @@ class BirthdayCog(commands.Cog):
         )
         await interaction.response.send_message(msg, ephemeral=True)
 
+    @birthday.command(name="list", description="List everyone's registered birthdays")
+    async def birthday_list(self, interaction: discord.Interaction) -> None:
+        # guild_only=True on the group — guild is always present.
+        guild = interaction.guild
+        assert guild is not None
+        entries = await birthday_calendar.list_all(self.bot.db)
+        lines = [
+            f"{bday.month:02d}/{bday.day:02d} — <@{user_id}>"
+            for user_id, bday in entries
+            if guild.get_member(user_id) is not None
+        ]
+        if not lines:
+            await interaction.response.send_message(
+                "No birthdays registered yet.", ephemeral=True
+            )
+            return
+        await interaction.response.send_message(
+            "\n".join(lines),
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
     @birthday.command(name="show", description="Show a registered birthday")
     @app_commands.describe(user="Whose birthday to show; defaults to yourself")
     async def birthday_show(

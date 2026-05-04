@@ -16,6 +16,7 @@ After the bot connects for the first time it runs `tree.sync()`. Discord can tak
 |---|---|---|
 | `/birthday set month:<1-12> day:<1-31>` | anyone | Register your birthday (overwrites any existing) |
 | `/birthday show [user]` | anyone | Show yours, or another user's |
+| `/birthday list` | anyone | List everyone's registered birthdays in calendar order. Members of this server only. Ephemeral output |
 | `/birthday remove` | anyone | Remove your own |
 | `/birthday remove user:<member>` | **Admin** (Administrator or Manage Server) | Remove someone else's |
 
