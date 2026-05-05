@@ -13,7 +13,9 @@ Operating guide for the bot — first-time setup, configuration, run, and deploy
 1. Open https://discord.com/developers/applications → **New Application**.
 2. **Bot** tab:
    - Click **Reset Token**, copy the token immediately (it's shown once). This is `DISCORD_TOKEN` later.
-   - Under **Privileged Gateway Intents**, enable **Message Content Intent**. (Required for the archive cog to see message text and the link embedder to detect tracked URLs.)
+   - Under **Privileged Gateway Intents**, enable:
+     - **Message Content Intent** — required for the archive cog to see message text and the link embedder to detect tracked URLs.
+     - **Server Members Intent** — required so `guild.get_member()` works reliably (e.g. `/birthday list` filters out users who have left the server).
 3. **OAuth2 → URL Generator**:
    - Scopes: `bot`, `applications.commands`.
    - Bot Permissions:
