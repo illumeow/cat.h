@@ -39,6 +39,11 @@ class Bot(commands.Bot):
     def __init__(self) -> None:
         intents = discord.Intents.default()
         intents.message_content = True
+        # Privileged intent — also requires the toggle in the Discord
+        # developer portal (Bot tab → Server Members Intent). Lets cogs
+        # rely on guild.get_member() / guild.members for membership-aware
+        # behavior (e.g. /birthday list filtering out users who left).
+        intents.members = True
         # command_prefix is unused (we only register slash commands) but is required.
         super().__init__(command_prefix="!", intents=intents)
         # Cross-cog handshake: when one cog deletes a message it owns (e.g.

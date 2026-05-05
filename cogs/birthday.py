@@ -99,21 +99,20 @@ class BirthdayCog(commands.Cog):
 
     @birthday.command(name="list", description="List everyone's registered birthdays")
     async def birthday_list(self, interaction: discord.Interaction) -> None:
+        # guild_only=True on the group — guild is always present.
+        guild = interaction.guild
+        assert guild is not None
         entries = await birthday_calendar.list_all(self.bot.db)
-        if not entries:
+        lines = [
+            f"{bday.month:02d}/{bday.day:02d} — <@{user_id}>"
+            for user_id, bday in entries
+            if guild.get_member(user_id) is not None
+        ]
+        if not lines:
             await interaction.response.send_message(
                 "No birthdays registered yet.", ephemeral=True
             )
             return
-        # No guild.get_member filter: the bot runs without the privileged
-        # members intent, so the member cache is sparse and the filter
-        # would drop quiet members. Discord resolves <@id> mentions
-        # client-side regardless of cache; left-the-server users render as
-        # a faded unknown-user, which is fine.
-        lines = [
-            f"{bday.month:02d}/{bday.day:02d} — <@{user_id}>"
-            for user_id, bday in entries
-        ]
         await interaction.response.send_message(
             "\n".join(lines),
             ephemeral=True,
