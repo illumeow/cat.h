@@ -139,6 +139,39 @@ URL_RULES: list[tuple[str, re.Pattern[str], Callable[[str], str], bool]] = [
 ]
 
 
+# Discord markdown wrappers we recognize around a URL. The URL regexes
+# match generously past the actual URL boundary (`\S*`, `[^\s&]*`),
+# which is what makes them tolerant of trailing characters in general,
+# but it also means a wrapping closer like `||` or `~~` gets slurped
+# into the match. `_strip_wrapping_markdown` peels that closer off when
+# the matching opener sits immediately before the match — so the URL
+# cleaner sees the bare URL (and won't, e.g., pack `||` into a query
+# value and then drop it along with a stripped tracker param).
+WRAPPING_PAIRS: tuple[tuple[str, str], ...] = (
+    ("||", "||"),
+    ("~~", "~~"),
+    ("***", "***"),
+    ("**", "**"),
+    ("__", "__"),
+    ("<", ">"),
+)
+
+
+def _strip_wrapping_markdown(match: re.Match[str]) -> tuple[str, str]:
+    """If `match` is wrapped in a known Discord markdown pair (opener
+    immediately before `match.start()`, closer slurped into the match),
+    return (bare_url, closer) so the caller can clean the bare URL and
+    re-append the closer in the substitution. Otherwise return the raw
+    match and an empty closer."""
+    raw = match.group(0)
+    full = match.string
+    start = match.start()
+    for left, right in WRAPPING_PAIRS:
+        if raw.endswith(right) and full[max(0, start - len(left)):start] == left:
+            return raw[: -len(right)], right
+    return raw, ""
+
+
 def _apply_rule(
     text: str, pattern: re.Pattern[str], cleaner: Callable[[str], str]
 ) -> tuple[str, list[str]]:
@@ -148,9 +181,10 @@ def _apply_rule(
     cleaned_urls: list[str] = []
 
     def replace(m: re.Match[str]) -> str:
-        cleaned = cleaner(m.group(0))
+        bare, closer = _strip_wrapping_markdown(m)
+        cleaned = cleaner(bare)
         cleaned_urls.append(cleaned)
-        return cleaned
+        return cleaned + closer
 
     return pattern.sub(replace, text), cleaned_urls
 
@@ -185,7 +219,8 @@ def _preview_eligible_urls(content: str) -> list[str]:
         if not preview:
             continue
         for match in pattern.finditer(content):
-            out.append(cleaner(match.group(0)))
+            bare, _closer = _strip_wrapping_markdown(match)
+            out.append(cleaner(bare))
     return out
 
 
