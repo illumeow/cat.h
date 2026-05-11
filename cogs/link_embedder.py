@@ -74,16 +74,6 @@ PLATFORM_COLORS: dict[str, discord.Color] = {
 EMBED_TITLE_MAX = 250
 EMBED_DESC_MAX = 4000
 
-# Titles that signal an anti-bot challenge page (Cloudflare's "Just a
-# moment...", various WAF flavors). When the sidecar lands on one of
-# these and gets nothing else useful, rendering an embed titled
-# "Just a moment..." is worse than rendering no embed — it misleads.
-CHALLENGE_TITLE_RE = re.compile(
-    r"\b(?:just a moment|cloudflare|attention required|access denied|"
-    r"checking your browser|security check)\b",
-    re.IGNORECASE,
-)
-
 
 USER_EXCLUDED_CHANNELS = parse_id_set(
     os.environ.get("LINK_EMBEDDER_EXCLUDED_CHANNELS", "")
@@ -347,16 +337,6 @@ class LinkEmbedderCog(commands.Cog):
             )
             if not title and not description and not meta.get("image"):
                 continue  # nothing worth rendering
-            # Anti-bot challenge: title looks like Cloudflare's challenge
-            # page AND we got no body content. Suppress the embed so the
-            # user doesn't see "Just a moment..." in their feed.
-            if (
-                title
-                and CHALLENGE_TITLE_RE.search(title)
-                and not description
-                and not meta.get("image")
-            ):
-                continue
             platform = meta.get("platform")
             if not isinstance(platform, str):
                 platform = ""
