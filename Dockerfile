@@ -29,9 +29,6 @@ COPY bot.py ./
 COPY core ./core
 COPY cogs ./cogs
 
-RUN useradd --create-home --shell /usr/sbin/nologin --uid 1000 bot \
-    && mkdir -p /app/data \
-    && chown -R bot:bot /app
-USER bot
+RUN mkdir -p /app/data
 
 CMD ["python", "bot.py"]
