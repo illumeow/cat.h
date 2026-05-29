@@ -3,7 +3,7 @@ services:
     build: .
     env_file: .env
     volumes:
-      - ./data:/app/data
+      - ./data:/app/data:z
     restart: unless-stopped
     # Reach the preview sidecar by service name on the default compose
     # network. The bot tolerates the service being unreachable (falls
