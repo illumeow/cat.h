@@ -19,8 +19,15 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
+# Lookahead appended to every URL pattern so the match stops before a
+# Discord markdown closer (`||`, `~~`, `**`, `__`, `>`). Without it the
+# greedy `\S*` terminal consumes the closer, and the cleaner then drops
+# it along with whatever tracker param it was removing. Longer
+# alternatives come first so `***` wins over `**`, etc.
+_URL_END = r"(?=\s|$|\|\||~~|\*\*\*|\*\*|__|>)"
+
 THREADS_URL_RE = re.compile(
-    r"https?://(?:www\.)?threads\.(?:com|net)/[^\s?]+(?:\?\S*)?",
+    r"https?://(?:www\.)?threads\.(?:com|net)/[^\s?]+(?:\?\S*?)?" + _URL_END,
     re.IGNORECASE,
 )
 # All Instagram URLs. Discord's native IG embed is routinely broken
@@ -29,7 +36,7 @@ THREADS_URL_RE = re.compile(
 # share-tracker if present and is a no-op otherwise; other params
 # (e.g. `img_index` on a carousel) are preserved.
 INSTAGRAM_URL_RE = re.compile(
-    r"https?://(?:www\.)?instagram\.com/[^\s?]+(?:\?\S*)?",
+    r"https?://(?:www\.)?instagram\.com/[^\s?]+(?:\?\S*?)?" + _URL_END,
     re.IGNORECASE,
 )
 # Dcard URLs carrying a `cid=…` campaign tracker (UUID) — produced by
@@ -38,7 +45,7 @@ INSTAGRAM_URL_RE = re.compile(
 # blocks our preview sidecar reliably enough that we'd just get "Just
 # a moment..." anyway). Only tracker-tagged URLs trigger a rewrite.
 DCARD_CID_URL_RE = re.compile(
-    r"https?://(?:www\.)?dcard\.tw/[^\s?]+\?\S*?\bcid=[^\s&]*\S*",
+    r"https?://(?:www\.)?dcard\.tw/[^\s?]+\?\S*?\bcid=\S*?" + _URL_END,
     re.IGNORECASE,
 )
 # YouTube URLs carrying a `si=…` share tracker (added by the in-app
@@ -48,7 +55,7 @@ DCARD_CID_URL_RE = re.compile(
 # URL like `?search_query=si=foo` doesn't false-match.
 YOUTUBE_SI_URL_RE = re.compile(
     r"https?://(?:(?:www\.|m\.|music\.)?youtube\.com|youtu\.be)"
-    r"/[^\s?]+\?(?:[^\s&]*&)?si=[^\s&]*\S*",
+    r"/[^\s?]+\?(?:[^\s&]*&)?si=\S*?" + _URL_END,
     re.IGNORECASE,
 )
 
@@ -85,16 +92,12 @@ EXCLUDED_CHANNELS = USER_EXCLUDED_CHANNELS | (
 )
 
 
-def _strip_query(url: str) -> str:
-    """Drop the entire `?…` query string."""
-    q = url.find("?")
-    return url[:q] if q != -1 else url
-
-
-def _strip_param(param: str) -> Callable[[str], str]:
-    """Build a cleaner that drops a single query param while preserving
-    the rest. Used when most params are meaningful and only one is a
-    tracker — e.g. Instagram's `igsh` alongside a real `img_index`."""
+def _strip_param(*params: str) -> Callable[[str], str]:
+    """Build a cleaner that drops the named query params while preserving
+    the rest. Used when most params are meaningful and only specific ones
+    are trackers — e.g. Instagram's `igsh` alongside a real `img_index`,
+    or Threads' `xmt` / `slof` alongside real path params."""
+    drop = frozenset(params)
 
     def clean(url: str) -> str:
         parsed = urlparse(url)
@@ -103,7 +106,7 @@ def _strip_param(param: str) -> Callable[[str], str]:
         kept = [
             (k, v)
             for k, v in parse_qsl(parsed.query, keep_blank_values=True)
-            if k != param
+            if k not in drop
         ]
         return urlunparse(parsed._replace(query=urlencode(kept)))
 
@@ -122,44 +125,11 @@ def _strip_param(param: str) -> Callable[[str], str]:
 # bypass — the sidecar would just see "Just a moment..."). Add a
 # platform = append a row.
 URL_RULES: list[tuple[str, re.Pattern[str], Callable[[str], str], bool]] = [
-    ("threads", THREADS_URL_RE, _strip_query, True),
+    ("threads", THREADS_URL_RE, _strip_param("xmt", "slof"), True),
     ("instagram", INSTAGRAM_URL_RE, _strip_param("igsh"), True),
     ("dcard", DCARD_CID_URL_RE, _strip_param("cid"), False),
     ("youtube", YOUTUBE_SI_URL_RE, _strip_param("si"), False),
 ]
-
-
-# Discord markdown wrappers we recognize around a URL. The URL regexes
-# match generously past the actual URL boundary (`\S*`, `[^\s&]*`),
-# which is what makes them tolerant of trailing characters in general,
-# but it also means a wrapping closer like `||` or `~~` gets slurped
-# into the match. `_strip_wrapping_markdown` peels that closer off when
-# the matching opener sits immediately before the match — so the URL
-# cleaner sees the bare URL (and won't, e.g., pack `||` into a query
-# value and then drop it along with a stripped tracker param).
-WRAPPING_PAIRS: tuple[tuple[str, str], ...] = (
-    ("||", "||"),
-    ("~~", "~~"),
-    ("***", "***"),
-    ("**", "**"),
-    ("__", "__"),
-    ("<", ">"),
-)
-
-
-def _strip_wrapping_markdown(match: re.Match[str]) -> tuple[str, str]:
-    """If `match` is wrapped in a known Discord markdown pair (opener
-    immediately before `match.start()`, closer slurped into the match),
-    return (bare_url, closer) so the caller can clean the bare URL and
-    re-append the closer in the substitution. Otherwise return the raw
-    match and an empty closer."""
-    raw = match.group(0)
-    full = match.string
-    start = match.start()
-    for left, right in WRAPPING_PAIRS:
-        if raw.endswith(right) and full[max(0, start - len(left)):start] == left:
-            return raw[: -len(right)], right
-    return raw, ""
 
 
 def _apply_rule(
@@ -171,10 +141,9 @@ def _apply_rule(
     cleaned_urls: list[str] = []
 
     def replace(m: re.Match[str]) -> str:
-        bare, closer = _strip_wrapping_markdown(m)
-        cleaned = cleaner(bare)
+        cleaned = cleaner(m.group(0))
         cleaned_urls.append(cleaned)
-        return cleaned + closer
+        return cleaned
 
     return pattern.sub(replace, text), cleaned_urls
 
@@ -209,8 +178,7 @@ def _preview_eligible_urls(content: str) -> list[str]:
         if not preview:
             continue
         for match in pattern.finditer(content):
-            bare, _closer = _strip_wrapping_markdown(match)
-            out.append(cleaner(bare))
+            out.append(cleaner(match.group(0)))
     return out
 
 
