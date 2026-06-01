@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
 BIRTHDAY_CHANNEL_ID = int(os.environ.get("BIRTHDAY_CHANNEL_ID", "0"))
 TZ = ZoneInfo(os.environ.get("TIME_ZONE", "UTC"))
-ANNOUNCE_TIME = time(hour=9, tzinfo=TZ)
+ANNOUNCE_TIME = time(hour=0, tzinfo=TZ)
 
 log = logging.getLogger(__name__)
 
