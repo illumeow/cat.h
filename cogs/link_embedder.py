@@ -125,7 +125,7 @@ def _strip_param(*params: str) -> Callable[[str], str]:
 # bypass — the sidecar would just see "Just a moment..."). Add a
 # platform = append a row.
 URL_RULES: list[tuple[str, re.Pattern[str], Callable[[str], str], bool]] = [
-    ("threads", THREADS_URL_RE, _strip_param("xmt", "slof"), True),
+    ("threads", THREADS_URL_RE, _strip_param("xmt", "slof"), False),
     ("instagram", INSTAGRAM_URL_RE, _strip_param("igsh"), True),
     ("dcard", DCARD_CID_URL_RE, _strip_param("cid"), False),
     ("youtube", YOUTUBE_SI_URL_RE, _strip_param("si"), False),
