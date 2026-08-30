@@ -39,23 +39,23 @@ INSTAGRAM_URL_RE = re.compile(
     r"https?://(?:www\.)?instagram\.com/[^\s?]+(?:\?\S*?)?" + _URL_END,
     re.IGNORECASE,
 )
-# Dcard URLs carrying a `cid=…` campaign tracker (UUID) — produced by
-# the in-app "share" flow. Narrow on purpose: clean Dcard URLs are
-# left alone (Discord's native auto-embed handles them, and Cloudflare
-# blocks our preview sidecar reliably enough that we'd just get "Just
-# a moment..." anyway). Only tracker-tagged URLs trigger a rewrite.
-DCARD_CID_URL_RE = re.compile(
-    r"https?://(?:www\.)?dcard\.tw/[^\s?]+\?\S*?\bcid=\S*?" + _URL_END,
+# All Dcard URLs. The cleaner drops the `cid=…` campaign tracker (UUID)
+# added by the in-app "share" flow and is a no-op otherwise — an
+# already-clean Dcard link is left in place untouched (see the repost
+# gate in `_plan_rewrite`), since Discord's native auto-embed handles
+# it and Cloudflare blocks our preview sidecar reliably enough that
+# we'd just get "Just a moment...".
+DCARD_URL_RE = re.compile(
+    r"https?://(?:www\.)?dcard\.tw/[^\s?]+(?:\?\S*?)?" + _URL_END,
     re.IGNORECASE,
 )
-# YouTube URLs carrying a `si=…` share tracker (added by the in-app
-# share / "Copy link" flow). Narrow on purpose: clean YouTube links
-# are left alone since Discord's native player embeds them inline.
-# `si=` must be a real query-param boundary (`?si=` or `&si=`) so a
-# URL like `?search_query=si=foo` doesn't false-match.
-YOUTUBE_SI_URL_RE = re.compile(
+# All YouTube URLs. The cleaner drops the `si=…` share tracker added by
+# the in-app share / "Copy link" flow and is a no-op otherwise — an
+# already-clean YouTube link is left in place untouched, since Discord's
+# native player embeds it inline already.
+YOUTUBE_URL_RE = re.compile(
     r"https?://(?:(?:www\.|m\.|music\.)?youtube\.com|youtu\.be)"
-    r"/[^\s?]+\?(?:[^\s&]*&)?si=\S*?" + _URL_END,
+    r"/[^\s?]+(?:\?\S*?)?" + _URL_END,
     re.IGNORECASE,
 )
 
@@ -96,39 +96,49 @@ def _strip_param(*params: str) -> Callable[[str], str]:
     """Build a cleaner that drops the named query params while preserving
     the rest. Used when most params are meaningful and only specific ones
     are trackers — e.g. Instagram's `igsh` alongside a real `img_index`,
-    or Threads' `xmt` / `slof` alongside real path params."""
+    or Threads' `xmt` / `slof` alongside real path params.
+
+    Byte-identical when there is nothing to drop: the rules now match
+    every URL on their platform, so `_plan_rewrite` uses "did the
+    cleaner change the text?" to decide whether a repost is worth it. A
+    urlencode round-trip on an already-clean URL would rewrite escapes
+    (`%20` → `+`) and drop trailing separators, which reads as a change
+    and would trigger a pointless repost — so we bail out first."""
     drop = frozenset(params)
 
     def clean(url: str) -> str:
         parsed = urlparse(url)
         if not parsed.query:
             return url
-        kept = [
-            (k, v)
-            for k, v in parse_qsl(parsed.query, keep_blank_values=True)
-            if k not in drop
-        ]
+        pairs = parse_qsl(parsed.query, keep_blank_values=True)
+        if not any(k in drop for k, _ in pairs):
+            return url
+        kept = [(k, v) for k, v in pairs if k not in drop]
         return urlunparse(parsed._replace(query=urlencode(kept)))
 
     return clean
 
 
 # Per-platform rewrite rules. Each entry: (name, pattern, cleaner,
-# preview). The pattern decides what to act on — matching it triggers a
-# webhook repost of the cleaned text, even if the cleaner output is
-# identical (some embeds, e.g. threads.com, render more reliably from a
-# fresh post). The `preview` flag controls whether we ask the preview
-# sidecar for OG metadata for these URLs and emit a custom embed:
-# False means "still rewrite the URL but skip the custom embed and
-# leave the URL un-wrapped so Discord's native auto-embed can try"
-# (used for Dcard, which sits behind a Cloudflare tier we can't reliably
-# bypass — the sidecar would just see "Just a moment..."). Add a
-# platform = append a row.
+# preview). Every pattern matches all URLs on its platform; matching
+# alone does NOT trigger a repost. `_plan_rewrite` reposts only when
+# there is something to gain — either the cleaner actually changed the
+# text (a tracker was stripped) or the rule has preview=True and wants a
+# custom embed. An already-clean URL under a preview=False rule is left
+# exactly as the user posted it.
+#
+# The `preview` flag controls whether we ask the preview sidecar for OG
+# metadata and emit a custom embed. False means "clean the URL if needed
+# but skip the custom embed and leave the URL un-wrapped so Discord's
+# native auto-embed can try" — used for Dcard (behind a Cloudflare tier
+# we can't reliably bypass; the sidecar would just see "Just a
+# moment..."), YouTube (native player is fine), and Threads (Discord's
+# native Threads embed works now). Add a platform = append a row.
 URL_RULES: list[tuple[str, re.Pattern[str], Callable[[str], str], bool]] = [
     ("threads", THREADS_URL_RE, _strip_param("xmt", "slof"), False),
     ("instagram", INSTAGRAM_URL_RE, _strip_param("igsh"), True),
-    ("dcard", DCARD_CID_URL_RE, _strip_param("cid"), False),
-    ("youtube", YOUTUBE_SI_URL_RE, _strip_param("si"), False),
+    ("dcard", DCARD_URL_RE, _strip_param("cid"), False),
+    ("youtube", YOUTUBE_URL_RE, _strip_param("si"), False),
 ]
 
 
@@ -151,7 +161,9 @@ def _apply_rule(
 def _rebuild_content(content: str) -> tuple[str, list[str]]:
     """Apply each URL rule to the message text. Returns (rebuilt, urls) —
     `urls` is the cleaned form of every URL we matched. Empty list means
-    no rule fired (the cue to leave the message alone)."""
+    no rule fired (the cue to leave the message alone). A non-empty list
+    with `rebuilt == content` means every match was already clean — the
+    caller still skips the repost unless a preview=True rule matched."""
     rebuilt = content
     matched_urls: list[str] = []
     for _name, pattern, cleaner, _preview in URL_RULES:
@@ -163,16 +175,16 @@ def _rebuild_content(content: str) -> tuple[str, list[str]]:
 def _preview_eligible_urls(content: str) -> list[str]:
     """Cleaned URLs in `content` that belong to rules with preview=True.
 
-    This re-runs each preview-enabled rule's regex against the *original*
-    text (not the rebuilt text), because some rules' patterns require
-    the tracker query param (Instagram's `igsh`, Dcard's `cid`) that the
-    cleaner has already stripped — so matching a post-cleaned URL
-    against the same pattern would fail.
+    Runs against the *original* text (not the rebuilt text) and applies
+    each rule's cleaner itself, so the returned strings match what
+    `_rebuild_content` put in the body — that identity is what makes the
+    `<…>` wrap in `_process_message` a plain `str.replace`.
 
-    Distinct from `_rebuild_content`'s matched_urls (which is all
-    matches and drives the rewrite trigger): this filters out
-    preview=False rules so the cog can route only the right URLs to the
-    preview sidecar and to the `<…>` auto-embed-suppression wrap."""
+    Distinct from `_rebuild_content`'s matched_urls (which is every
+    match, regardless of rule): this filters out preview=False rules so
+    the cog routes only the right URLs to the preview sidecar and to the
+    `<…>` auto-embed-suppression wrap. A non-empty result is also what
+    keeps an already-clean URL worth reposting at all."""
     out: list[str] = []
     for _name, pattern, cleaner, preview in URL_RULES:
         if not preview:
@@ -180,6 +192,28 @@ def _preview_eligible_urls(content: str) -> list[str]:
         for match in pattern.finditer(content):
             out.append(cleaner(match.group(0)))
     return out
+
+
+def _plan_rewrite(content: str) -> tuple[str, list[str]] | None:
+    """Decide whether `content` is worth reposting, and how. Returns
+    (rebuilt_content, preview_urls) when it is, or None to leave the
+    message alone.
+
+    None covers two cases: no rule matched at all, or every match was
+    already clean *and* no matched rule wants a custom embed — i.e. a
+    repost would produce a byte-identical message with no embed to
+    justify it. Pure string work, so the edit listener can call it as a
+    prefilter before paying for an HTTP message fetch."""
+    rebuilt, matched_urls = _rebuild_content(content)
+    if not matched_urls:
+        return None
+    # URLs from rules with preview=False are excluded from both the
+    # sidecar lookup and the `<…>` wrapping — they stay bare so Discord's
+    # native auto-embed can still try.
+    preview_urls = _preview_eligible_urls(content)
+    if rebuilt == content and not preview_urls:
+        return None
+    return rebuilt, preview_urls
 
 
 def _truncate_for_embed(s: str | None, limit: int) -> str | None:
@@ -381,8 +415,10 @@ class LinkEmbedderCog(commands.Cog):
         # We also rewrite tracked links that the user adds via *edit* (e.g.
         # they post "check this:" then paste an instagram link a moment
         # later). MESSAGE_UPDATE is partial: skip events without a content
-        # field or without one of our patterns in it, so we don't pay an
-        # HTTP fetch on every embed-only / pin / etc. edit.
+        # field, and events whose content wouldn't earn a repost anyway,
+        # so we don't pay an HTTP fetch on every embed-only / pin / etc.
+        # edit — nor on an edit that merely happens to contain an
+        # already-clean YouTube/Dcard/Threads link.
         if payload.guild_id is None:
             return
         if "content" not in payload.data:
@@ -392,7 +428,7 @@ class LinkEmbedderCog(commands.Cog):
         new_content = payload.data["content"]
         if not new_content:
             return
-        if not any(p.search(new_content) for _n, p, _c, _pv in URL_RULES):
+        if _plan_rewrite(new_content) is None:
             return
 
         channel = self.bot.get_channel(payload.channel_id)
@@ -407,8 +443,11 @@ class LinkEmbedderCog(commands.Cog):
     async def _process_message(
         self, message: discord.Message, *, is_edit: bool = False
     ) -> None:
-        """Apply URL rules to `message.content`; if any rule matched,
-        replace the message with a cleaned webhook repost. Shared between
+        """Apply URL rules to `message.content`; if a rule matched *and*
+        there is something to gain (the cleaner changed the text, or the
+        rule wants a custom embed), replace the message with a cleaned
+        webhook repost. Already-clean URLs under preview=False rules are
+        left untouched — no repost at all. Shared between
         on_message (initial posts) and on_raw_message_edit (edits that add
         a tracked link). When `is_edit=True`, also re-target the archive
         cog's just-posted "Edited" mod-log notice so the jump URL points
@@ -444,9 +483,10 @@ class LinkEmbedderCog(commands.Cog):
         else:
             return  # voice/stage/uncategorized — nothing we can post into
 
-        new_content, matched_urls = _rebuild_content(message.content)
-        if not matched_urls:
+        plan = _plan_rewrite(message.content)
+        if plan is None:
             return
+        new_content, preview_urls = plan
 
         # Re-entrancy guard. The check + add is atomic (no await between),
         # so two concurrent _process_message tasks for the same message ID
@@ -469,10 +509,6 @@ class LinkEmbedderCog(commands.Cog):
             # embeds would compete with (and double-render alongside) those.
             # We can't use suppress_embeds=True for this: it sets the message's
             # SUPPRESS_EMBEDS flag, which hides every embed including our own.
-            # URLs from rules with preview=False (Dcard) are excluded from
-            # both the sidecar lookup and the wrapping — they stay bare so
-            # Discord's native auto-embed can still try.
-            preview_urls = _preview_eligible_urls(message.content)
             embeds = await self._build_preview_embeds(preview_urls)
             body = new_content
             if embeds:

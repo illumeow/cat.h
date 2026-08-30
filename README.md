@@ -6,7 +6,7 @@ A personal Discord bot for one server. Features are added one cog at a time — 
 
 - **Birthday** — `/birthday` to register a month/day; the bot announces it once a year at 09:00 in a configured channel.
 - **Deleted-message archive** — full-logging archive with a live mod-log channel for every edit and delete, plus moderator-only `/archive` queries to look anything up after the fact. 90-day retention.
-- **Link embedder** — automatically rewrites tracked links from supported platforms (`threads.com` / `threads.net`, `instagram.com` URLs carrying an `?igsh=…` share tracker, `dcard.tw` URLs carrying a `?cid=…` campaign tracker, and `youtube.com` / `youtu.be` URLs carrying an `?si=…` share tracker), reposts a cleaned version via webhook with a custom embed built from a Playwright sidecar, then offers the original poster a confirm/retract via reactions.
+- **Link embedder** — strips tracking params from links on supported platforms (`threads.com` / `threads.net`, `instagram.com`, `dcard.tw`, `youtube.com` / `youtu.be`) and reposts the cleaned version via webhook, then offers the original poster a confirm/retract via reactions. Links that are already clean are left alone, except on Instagram, where the repost also carries a custom embed built from a Playwright sidecar because Discord's native IG embed is unreliable.
 
 ## Quick start
 
