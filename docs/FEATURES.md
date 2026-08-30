@@ -42,7 +42,7 @@ No commands. When someone **posts or edits a message to add** a tracked link fro
 
 1. Cleans the platform's tracking params:
    - **Threads** (`threads.com` / `threads.net`): drops `xmt=…` and `slof=…`. **No custom embed** — Discord's native Threads embed works, so the cleaned URL stays bare in the body.
-   - **Instagram** (`instagram.com`): drops only `igsh=…` from the query, keeping anything else like `img_index=2`.
+   - **Instagram** (`instagram.com`): drops only `igsi=…` (and the older `igsh=…` name for the same share tracker) from the query, keeping anything else like `img_index=2`.
    - **Dcard** (`dcard.tw`): drops only `cid=…` from the query (the campaign tracker added by the in-app share flow), keeping anything else. **No custom embed** — Dcard sits behind a Cloudflare tier the preview sidecar can't reliably bypass, so the cleaned URL stays bare in the body and Discord's native auto-embed renders whatever it can.
    - **YouTube** (`youtube.com` / `youtu.be`, plus `m.` and `music.` subdomains): drops only `si=…` from the query (the share tracker added by the in-app share / "Copy link" flow), keeping anything else like `v=…` or `t=…`. **No custom embed** — Discord's native player embeds YouTube links inline already.
 

@@ -32,9 +32,9 @@ THREADS_URL_RE = re.compile(
 )
 # All Instagram URLs. Discord's native IG embed is routinely broken
 # (missing image, wrong caption), so we always want a custom embed —
-# the rule fires regardless of params. The cleaner strips the `igsh`
-# share-tracker if present and is a no-op otherwise; other params
-# (e.g. `img_index` on a carousel) are preserved.
+# the rule fires regardless of params. The cleaner strips the `igsi`
+# share-tracker (formerly `igsh`) if present and is a no-op otherwise;
+# other params (e.g. `img_index` on a carousel) are preserved.
 INSTAGRAM_URL_RE = re.compile(
     r"https?://(?:www\.)?instagram\.com/[^\s?]+(?:\?\S*?)?" + _URL_END,
     re.IGNORECASE,
@@ -95,7 +95,7 @@ EXCLUDED_CHANNELS = USER_EXCLUDED_CHANNELS | (
 def _strip_param(*params: str) -> Callable[[str], str]:
     """Build a cleaner that drops the named query params while preserving
     the rest. Used when most params are meaningful and only specific ones
-    are trackers — e.g. Instagram's `igsh` alongside a real `img_index`,
+    are trackers — e.g. Instagram's `igsi` alongside a real `img_index`,
     or Threads' `xmt` / `slof` alongside real path params.
 
     Byte-identical when there is nothing to drop: the rules now match
@@ -136,7 +136,9 @@ def _strip_param(*params: str) -> Callable[[str], str]:
 # native Threads embed works now). Add a platform = append a row.
 URL_RULES: list[tuple[str, re.Pattern[str], Callable[[str], str], bool]] = [
     ("threads", THREADS_URL_RE, _strip_param("xmt", "slof"), False),
-    ("instagram", INSTAGRAM_URL_RE, _strip_param("igsh"), True),
+    # `igsh` is the older name for the same share tracker; strip both so
+    # links copied before Instagram renamed it still get cleaned.
+    ("instagram", INSTAGRAM_URL_RE, _strip_param("igsi", "igsh"), True),
     ("dcard", DCARD_URL_RE, _strip_param("cid"), False),
     ("youtube", YOUTUBE_URL_RE, _strip_param("si"), False),
 ]
