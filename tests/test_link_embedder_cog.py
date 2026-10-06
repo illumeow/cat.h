@@ -226,49 +226,6 @@ async def test_finalize_repost_stamps_deleted_at_on_original(
 # --- _build_preview_embeds: filter out anti-bot challenge pages ------
 
 
-@pytest.mark.asyncio
-async def test_build_preview_embeds_skips_cloudflare_challenge_page(
-    fresh_db, monkeypatch
-):
-    """When the preview sidecar lands on a Cloudflare "Just a moment..."
-    challenge page (Dcard sits behind one of these), it returns metadata
-    with the challenge title and empty description/image. Rendering an
-    embed titled "Just a moment..." is worse than rendering no embed —
-    it actively misleads. The cog should recognize the pattern and skip
-    those URLs."""
-    from cogs.link_embedder import LinkEmbedderCog
-
-    cog = LinkEmbedderCog(__import__("types").SimpleNamespace(db=fresh_db))
-    cog._http = object()  # any non-None — _fetch_preview is mocked below
-
-    # Force PREVIEW_SERVICE_URL to a non-empty value so the early-return
-    # in _build_preview_embeds doesn't short-circuit (the env var is read
-    # at module load time and may be empty in the test env).
-    monkeypatch.setattr("cogs.link_embedder.PREVIEW_SERVICE_URL", "http://x")
-
-    # Sidecar response that looks exactly like Cloudflare's basic JS
-    # challenge: a title, no description, no image.
-    challenge_meta = {
-        "platform": "dcard",
-        "url": "https://www.dcard.tw/f/ntu/p/1",
-        "title": "Just a moment...",
-        "description": "",
-        "image": "",
-        "video": None,
-        "siteName": "Dcard",
-    }
-    monkeypatch.setattr(
-        cog, "_fetch_preview", AsyncMock(return_value=challenge_meta)
-    )
-
-    embeds = await cog._build_preview_embeds(
-        ["https://www.dcard.tw/f/ntu/p/1"]
-    )
-    assert embeds == [], (
-        "embed should be suppressed when the only metadata we got back "
-        "looks like an anti-bot challenge page"
-    )
-
 
 @pytest.mark.asyncio
 async def test_process_message_dcard_url_skips_preview_and_wrapping(

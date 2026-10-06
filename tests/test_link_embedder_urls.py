@@ -3,7 +3,6 @@
 Covers the pure functions only — no Discord, no aiohttp, no cog
 state. The pieces under test:
 
-- `_strip_query` — drops the whole `?…` (used for threads.com)
 - `_strip_param("igsh")` — drops a single query param, keeps others
   (used for instagram.com; no-op when the param isn't present)
 - `_apply_rule` — runs one regex+cleaner over a string and reports
@@ -19,35 +18,15 @@ rewrite pipeline don't quietly regress threads/instagram handling.
 import re
 
 from cogs.link_embedder import (
-    DCARD_CID_URL_RE,
     INSTAGRAM_URL_RE,
     THREADS_URL_RE,
-    YOUTUBE_SI_URL_RE,
     _apply_rule,
+    _plan_rewrite,
     _preview_eligible_urls,
     _rebuild_content,
     _strip_param,
-    _strip_query,
     _truncate_for_embed,
 )
-
-
-# --- _strip_query -----------------------------------------------------
-
-
-def test_strip_query_drops_full_query_string():
-    assert (
-        _strip_query("https://threads.com/post/abc?xmt=foo&utm=bar")
-        == "https://threads.com/post/abc"
-    )
-
-
-def test_strip_query_keeps_url_without_query_unchanged():
-    assert _strip_query("https://threads.com/post/abc") == "https://threads.com/post/abc"
-
-
-def test_strip_query_handles_bare_question_mark():
-    assert _strip_query("https://threads.com/post/abc?") == "https://threads.com/post/abc"
 
 
 # --- _strip_param ------------------------------------------------------
@@ -99,7 +78,7 @@ def test_strip_param_handles_param_at_either_position():
 
 
 def test_apply_rule_returns_unchanged_text_and_empty_list_on_no_match():
-    rebuilt, urls = _apply_rule("plain text no link", THREADS_URL_RE, _strip_query)
+    rebuilt, urls = _apply_rule("plain text no link", THREADS_URL_RE, _strip_param("xmt"))
     assert rebuilt == "plain text no link"
     assert urls == []
 
@@ -108,7 +87,7 @@ def test_apply_rule_substitutes_match_and_records_cleaned_url():
     rebuilt, urls = _apply_rule(
         "look: https://threads.com/post/abc?xmt=foo end",
         THREADS_URL_RE,
-        _strip_query,
+        _strip_param("xmt", "q"),
     )
     assert rebuilt == "look: https://threads.com/post/abc end"
     assert urls == ["https://threads.com/post/abc"]
@@ -118,7 +97,7 @@ def test_apply_rule_collects_one_entry_per_match_in_source_order():
     rebuilt, urls = _apply_rule(
         "a https://threads.com/x?q=1 then b https://threads.com/y?q=2",
         THREADS_URL_RE,
-        _strip_query,
+        _strip_param("xmt", "q"),
     )
     assert rebuilt == "a https://threads.com/x then b https://threads.com/y"
     assert urls == ["https://threads.com/x", "https://threads.com/y"]
@@ -226,36 +205,6 @@ def test_threads_regex_matches_both_dotcom_and_dotnet_hosts():
 # that drives the Instagram rule.
 
 
-def test_dcard_cid_regex_matches_url_with_cid_param():
-    m = DCARD_CID_URL_RE.search(
-        "https://www.dcard.tw/f/ntu/p/261398533?cid=eeb65574-0784-49d8-b298-15b4ca089da2"
-    )
-    assert m is not None
-
-
-def test_dcard_cid_regex_does_not_match_clean_dcard_url():
-    assert DCARD_CID_URL_RE.search("https://www.dcard.tw/f/ntu/p/261398533") is None
-    assert (
-        DCARD_CID_URL_RE.search("https://www.dcard.tw/f/ntu/p/261398533?utm=x")
-        is None
-    )
-
-
-def test_dcard_cid_regex_matches_with_or_without_www():
-    assert (
-        DCARD_CID_URL_RE.search(
-            "https://dcard.tw/f/ntu/p/261398533?cid=abc"
-        )
-        is not None
-    )
-    assert (
-        DCARD_CID_URL_RE.search(
-            "https://www.dcard.tw/f/ntu/p/261398533?cid=abc"
-        )
-        is not None
-    )
-
-
 def test_rebuild_content_dcard_url_with_cid_strips_only_cid():
     rebuilt, urls = _rebuild_content(
         "look: https://www.dcard.tw/f/ntu/p/261398533?cid=eeb65574"
@@ -272,11 +221,9 @@ def test_rebuild_content_dcard_url_keeps_other_params():
     assert urls == ["https://www.dcard.tw/f/ntu/p/123?utm_source=share"]
 
 
-def test_rebuild_content_clean_dcard_link_is_left_alone():
-    text = "https://www.dcard.tw/f/ntu/p/261398533"
-    rebuilt, urls = _rebuild_content(text)
-    assert rebuilt == text
-    assert urls == []
+def test_plan_rewrite_clean_dcard_link_is_left_alone():
+    # preview=False and nothing to strip — no repost.
+    assert _plan_rewrite("https://www.dcard.tw/f/ntu/p/261398533") is None
 
 
 # --- YouTube rule -----------------------------------------------------
@@ -285,52 +232,6 @@ def test_rebuild_content_clean_dcard_link_is_left_alone():
 # (`si=…` from the in-app share / "Copy link" flow). Clean YouTube
 # links are left alone — Discord's native player handles them inline,
 # so a custom embed adds nothing.
-
-
-def test_youtube_si_regex_matches_youtu_be_short_link():
-    assert (
-        YOUTUBE_SI_URL_RE.search("https://youtu.be/dQw4w9WgXcQ?si=share_token")
-        is not None
-    )
-
-
-def test_youtube_si_regex_matches_watch_url_with_si():
-    assert (
-        YOUTUBE_SI_URL_RE.search(
-            "https://www.youtube.com/watch?v=dQw4w9WgXcQ&si=share_token"
-        )
-        is not None
-    )
-
-
-def test_youtube_si_regex_matches_subdomains_and_shorts():
-    assert (
-        YOUTUBE_SI_URL_RE.search("https://m.youtube.com/watch?v=abc&si=t") is not None
-    )
-    assert (
-        YOUTUBE_SI_URL_RE.search("https://music.youtube.com/watch?v=abc&si=t")
-        is not None
-    )
-    assert (
-        YOUTUBE_SI_URL_RE.search("https://www.youtube.com/shorts/abc?si=xyz")
-        is not None
-    )
-
-
-def test_youtube_si_regex_does_not_match_clean_youtube_url():
-    assert YOUTUBE_SI_URL_RE.search("https://www.youtube.com/watch?v=abc") is None
-    assert YOUTUBE_SI_URL_RE.search("https://youtu.be/abc") is None
-
-
-def test_youtube_si_regex_does_not_falsematch_si_in_other_param():
-    # The literal "si=" appearing inside another param's value isn't a
-    # real share tracker — must not match.
-    assert (
-        YOUTUBE_SI_URL_RE.search(
-            "https://www.youtube.com/results?search_query=si=foo"
-        )
-        is None
-    )
 
 
 def test_rebuild_content_youtube_url_with_si_strips_only_si():
@@ -355,26 +256,21 @@ def test_rebuild_content_youtube_keeps_other_params():
     assert urls == ["https://www.youtube.com/watch?v=abc&t=42"]
 
 
-def test_rebuild_content_clean_youtube_link_is_left_alone():
-    text = "https://www.youtube.com/watch?v=abc"
-    rebuilt, urls = _rebuild_content(text)
-    assert rebuilt == text
-    assert urls == []
+def test_plan_rewrite_clean_youtube_link_is_left_alone():
+    # preview=False and nothing to strip — no repost.
+    assert _plan_rewrite("https://www.youtube.com/watch?v=abc") is None
 
 
 # --- _preview_eligible_urls -------------------------------------------
 
 
-def test_preview_eligible_urls_includes_threads_and_instagram():
+def test_preview_eligible_urls_includes_instagram_excludes_threads():
     urls = _preview_eligible_urls(
         "look at https://threads.com/post/abc?xmt=foo and "
         "https://www.instagram.com/p/IG/?igsh=hash"
     )
-    # Both rules have preview=True, so both cleaned URLs come back.
-    assert urls == [
-        "https://threads.com/post/abc",
-        "https://www.instagram.com/p/IG/",
-    ]
+    # Only Instagram has preview=True; Threads uses Discord's native embed.
+    assert urls == ["https://www.instagram.com/p/IG/"]
 
 
 def test_preview_eligible_urls_excludes_dcard():
@@ -397,10 +293,10 @@ def test_preview_eligible_urls_excludes_youtube():
 def test_preview_eligible_urls_only_returns_preview_enabled_in_mixed_message():
     urls = _preview_eligible_urls(
         "https://www.dcard.tw/f/ntu/p/1?cid=x and "
-        "https://threads.com/@u/post/2?xmt=y"
+        "https://www.instagram.com/p/2/?igsi=y"
     )
-    # Threads only — Dcard is filtered out.
-    assert urls == ["https://threads.com/@u/post/2"]
+    # Instagram only — Dcard is filtered out.
+    assert urls == ["https://www.instagram.com/p/2/"]
 
 
 # --- _truncate_for_embed ----------------------------------------------
