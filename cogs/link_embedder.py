@@ -61,6 +61,12 @@ YOUTUBE_URL_RE = re.compile(
 
 WEBHOOK_NAME_SUFFIX = "Link Embedder"
 
+# An edit event only counts as a user edit if its `edited_timestamp` is this
+# fresh. Discord also fires MESSAGE_UPDATE (with full `content`) when it
+# re-unfurls embeds on old messages; those carry a stale or null
+# `edited_timestamp` and must not trigger a repost of a months-old message.
+EDIT_FRESHNESS_S = 300
+
 CONFIRM_EMOJI = "\N{WHITE HEAVY CHECK MARK}"
 DELETE_EMOJI = "\N{CROSS MARK}"
 
@@ -424,6 +430,14 @@ class LinkEmbedderCog(commands.Cog):
         if payload.guild_id is None:
             return
         if "content" not in payload.data:
+            return
+        # Real content edits stamp a fresh `edited_timestamp`; embed
+        # refreshes on old messages don't (null or the last real edit).
+        edited_raw = payload.data.get("edited_timestamp")
+        if not edited_raw:
+            return
+        edited_at = discord.utils.parse_time(edited_raw)
+        if (discord.utils.utcnow() - edited_at).total_seconds() > EDIT_FRESHNESS_S:
             return
         if is_channel_or_parent_in(self.bot, payload.channel_id, EXCLUDED_CHANNELS):
             return

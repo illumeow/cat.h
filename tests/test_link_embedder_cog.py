@@ -621,3 +621,62 @@ async def test_build_preview_embeds_instagram_normal_post_no_footer(
     )
     assert len(embeds) == 1
     assert embeds[0].footer.text is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("edited_timestamp", [None, "2025-10-01T12:00:00+00:00"])
+async def test_edit_listener_ignores_embed_refresh_on_old_message(
+    fresh_db, edited_timestamp
+):
+    """Discord fires MESSAGE_UPDATE with full `content` when it re-unfurls
+    embeds on old messages. Those carry a null or stale `edited_timestamp`;
+    treating them as edits reposted year-old links into the channel."""
+    from cogs.link_embedder import LinkEmbedderCog
+
+    bot = make_bot_stub(db=fresh_db)
+    cog = LinkEmbedderCog(bot)
+    cog._process_message = AsyncMock()
+
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.fetch_message = AsyncMock(return_value=MagicMock())
+    bot.get_channel = MagicMock(return_value=channel)
+
+    payload = MagicMock()
+    payload.guild_id = 100
+    payload.channel_id = 200
+    payload.message_id = 5000
+    payload.data = {
+        "content": "https://www.instagram.com/p/abc/?igsi=xyz",
+        "edited_timestamp": edited_timestamp,
+    }
+
+    await cog.on_raw_message_edit(payload)
+
+    cog._process_message.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_edit_listener_processes_fresh_edit(fresh_db):
+    from cogs.link_embedder import LinkEmbedderCog
+
+    bot = make_bot_stub(db=fresh_db)
+    cog = LinkEmbedderCog(bot)
+    cog._process_message = AsyncMock()
+
+    message = MagicMock()
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.fetch_message = AsyncMock(return_value=message)
+    bot.get_channel = MagicMock(return_value=channel)
+
+    payload = MagicMock()
+    payload.guild_id = 100
+    payload.channel_id = 200
+    payload.message_id = 5000
+    payload.data = {
+        "content": "https://www.instagram.com/p/abc/?igsi=xyz",
+        "edited_timestamp": discord.utils.utcnow().isoformat(),
+    }
+
+    await cog.on_raw_message_edit(payload)
+
+    cog._process_message.assert_awaited_once_with(message, is_edit=True)
